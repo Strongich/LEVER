@@ -5,7 +5,11 @@ __pycache__/
 
 # C extensions
 *.so
-
+# models
+psi_models/
+states_final/
+faiss_index/
+__pycache__/
 # Distribution / packaging
 .Python
 build/

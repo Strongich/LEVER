@@ -1,0 +1,13 @@
+faiss-cpu
+numpy
+sentence-transformers
+transformers
+torch
+openai
+pydantic
+python-dotenv
+pandas
+tqdm
+scikit-learn
+matplotlib
+
