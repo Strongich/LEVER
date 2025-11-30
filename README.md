@@ -68,6 +68,7 @@ python pi2vec_preparation.py
 
 The script will:
 - Process states from `states_f/` folder (both `gold` and `path` policies)
+- **Data Processing**: Currently processes only 10% of available seeds from `states_f/`, and for each selected seed, creates 3 policy snapshots at different training stages: 20%, 60%, and 100% of training progress
 - Train successor models for each policy
 - Add policies to the Faiss database with metadata (including Q-tables)
 - Train and save the reward regressor model
@@ -103,6 +104,9 @@ python search_faiss_policies.py "collect gold efficiently" --seed 0038 --filter-
 # Show all metadata fields
 python search_faiss_policies.py "your query" --show-all
 ```
+
+**Note**: Currently, the framework supports the following query combination:
+- Multi-objective queries with seed filtering: `python search_faiss_policies.py "Find the fastest exit and collect as much gold as possible" --seed <seed>`
 
 **How `search_faiss_policies.py` works:**
 
