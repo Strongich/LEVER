@@ -188,7 +188,7 @@ def get_episode_path(base_dir, policy, seed, episode_id):
     episode_str = f"episode_{int(episode_id):06d}"
     return os.path.join(
         base_dir,
-        "states_final",
+        "states_f",
         policy,
         seed,
         "episodes",
@@ -219,10 +219,10 @@ def create_canonical_states():
 
     # Find all episode_states.npy files for each policy
     gold_pattern = os.path.join(
-        base_dir, "states_final", "gold", "**", "episode_states.npy"
+        base_dir, "states_f", "gold", "**", "episode_states.npy"
     )
     path_pattern = os.path.join(
-        base_dir, "states_final", "path", "**", "episode_states.npy"
+        base_dir, "states_f", "path", "**", "episode_states.npy"
     )
 
     gold_files = glob.glob(gold_pattern, recursive=True)
@@ -355,8 +355,8 @@ def process_states():
     results = []
 
     # First, find seeds that exist in BOTH policies
-    gold_seed_pattern = os.path.join(base_dir, "states_final", "gold", "seed_*")
-    path_seed_pattern = os.path.join(base_dir, "states_final", "path", "seed_*")
+    gold_seed_pattern = os.path.join(base_dir, "states_f", "gold", "seed_*")
+    path_seed_pattern = os.path.join(base_dir, "states_f", "path", "seed_*")
 
     gold_seed_dirs = glob.glob(gold_seed_pattern)
     path_seed_dirs = glob.glob(path_seed_pattern)
@@ -388,7 +388,7 @@ def process_states():
         print(f"\nProcessing policy: {policy}")
 
         for seed_name in selected_seed_names:
-            seed_dir = os.path.join(base_dir, "states_final", policy, seed_name)
+            seed_dir = os.path.join(base_dir, "states_f", policy, seed_name)
             rewards_file = os.path.join(seed_dir, "episode_rewards.csv")
 
             if not os.path.exists(rewards_file):
@@ -460,6 +460,8 @@ def process_states():
                         "policy_name": policy_name,
                         "reward": reward,
                         "transitions": pairs,
+                        "episode_id": episode_id,
+                        "seed_name": seed_name,
                     }
                 )
 
@@ -473,6 +475,8 @@ def process_states():
                 "policy_target": result["policy_target"],
                 "policy_name": result["policy_name"],
                 "reward": result["reward"],
+                "episode_id": result["episode_id"],
+                "seed_name": result["seed_name"],
             }
             for result in results
         ]

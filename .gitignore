@@ -8,6 +8,7 @@ __pycache__/
 # models
 psi_models/
 states_final/
+states_f/
 faiss_index/
 __pycache__/
 # Distribution / packaging

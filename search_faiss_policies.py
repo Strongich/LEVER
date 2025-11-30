@@ -435,6 +435,14 @@ IMPORTANT: Do not return any other text than the list of sub-queries.
                     print(
                         f"      Robustness: {best_policy.get('robustness_score', 0):.2%}"
                     )
+                    if best_policy.get("q_table") is not None:
+                        q_table = best_policy.get("q_table")
+                        if isinstance(q_table, list):
+                            q_table = np.array(q_table)
+                        print(
+                            f"      Q-table shape: {q_table.shape if hasattr(q_table, 'shape') else 'N/A'}"
+                        )
+                        print("      Q-table available: Yes")
                 else:
                     # Show key metrics
                     if best_policy.get("energy_consumption") is not None:
@@ -443,6 +451,14 @@ IMPORTANT: Do not return any other text than the list of sub-queries.
                         )
                     if best_policy.get("reward") is not None:
                         print(f"      Reward: {best_policy.get('reward', 0):.4f}")
+                    if best_policy.get("q_table") is not None:
+                        q_table = best_policy.get("q_table")
+                        if isinstance(q_table, list):
+                            q_table = np.array(q_table)
+                        print(
+                            f"      Q-table shape: {q_table.shape if hasattr(q_table, 'shape') else 'N/A'}"
+                        )
+                        print("      Q-table available: Yes")
             else:
                 print("   No policies found")
 
@@ -572,6 +588,14 @@ IMPORTANT: Do not return any other text than the list of sub-queries.
                 print(f"   Memory: {result.get('inference_memory_mb', 0):.2f}MB")
                 print(f"   Model Size: {result.get('model_size_mb', 0):.2f}MB")
                 print(f"   Robustness: {result.get('robustness_score', 0):.2%}")
+                if result.get("q_table") is not None:
+                    q_table = result.get("q_table")
+                    if isinstance(q_table, list):
+                        q_table = np.array(q_table)
+                    print(
+                        f"   Q-table shape: {q_table.shape if hasattr(q_table, 'shape') else 'N/A'}"
+                    )
+                    print("   Q-table available: Yes")
             else:
                 # Show key metrics based on optimization
                 if optimize_by == "inference_time":
@@ -586,6 +610,16 @@ IMPORTANT: Do not return any other text than the list of sub-queries.
                     print(f"   Memory: {result.get('inference_memory_mb', 0):.2f}MB")
                 elif optimize_by == "robustness":
                     print(f"   Robustness: {result.get('robustness_score', 0):.2%}")
+
+                # Show Q-table if available
+                if result.get("q_table") is not None:
+                    q_table = result.get("q_table")
+                    if isinstance(q_table, list):
+                        q_table = np.array(q_table)
+                    print(
+                        f"   Q-table shape: {q_table.shape if hasattr(q_table, 'shape') else 'N/A'}"
+                    )
+                    print("   Q-table available: Yes")
 
             print()
 

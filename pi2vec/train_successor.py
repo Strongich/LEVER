@@ -91,6 +91,30 @@ def main():
         )
         regressor_training_data["policy_embedding"].append(policy_embedding)
         regressor_training_data["reward"].append(reward)
+
+        # Load Q-table from episode folder
+        episode_id = r.episode_id
+        seed_name = r.seed_name
+        episode_str = f"episode_{int(episode_id):06d}"
+        q_table_path = os.path.join(
+            os.getcwd(),
+            "states_f",
+            policy_target,
+            seed_name,
+            "episodes",
+            episode_str,
+            "q_table.npy",
+        )
+
+        q_table = None
+        if os.path.exists(q_table_path):
+            try:
+                q_table = np.load(q_table_path)
+                # Convert to list for JSON serialization in metadata
+                q_table = q_table.tolist()
+            except Exception as e:
+                print(f"Warning: Could not load Q-table from {q_table_path}: {e}")
+
         faiss_entry = {
             "policy_target": policy_target,
             "policy_seed": policy_seed,
@@ -98,6 +122,7 @@ def main():
             "description": desc,
             "reward": reward,
             "policy_embedding": policy_embedding,
+            "q_table": q_table,  # Q-table as list (or None if not found)
             # example values
             "energy_consumption": round(np.random.uniform(0, 1), 3),
         }
