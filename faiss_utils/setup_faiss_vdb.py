@@ -18,6 +18,8 @@ import faiss
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
+from policy_reusability.DAG import DAG
+
 
 class FaissVectorDB:
     """Faiss Vector Database manager for policy storage and retrieval."""
@@ -197,7 +199,9 @@ class FaissVectorDB:
 
         # Load metadata
         with open(self.metadata_path, "rb") as f:
+            print("Load pickle file")
             data = pickle.load(f)
+            print("Loaded pickle file")
             self.metadata = data["metadata"]
             self.policy_id_map = data["policy_id_map"]
 

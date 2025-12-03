@@ -16,11 +16,11 @@ from openai import OpenAI
 from pydantic import BaseModel
 
 from faiss_utils.setup_faiss_vdb import FaissVectorDB
+from my_work.init_gridworld import init_gridworld_rand
 from pi2vec.train_regressor import load_model
 
 # Load environment variables
 load_dotenv()
-
 
 class QueryDecompositionResponse(BaseModel):
     """Pydantic model for query decomposition response."""
@@ -361,6 +361,8 @@ IMPORTANT: Do not return any other text than the list of sub-queries.
         print("=" * 80)
         print()
 
+        dags_to_combine = []
+
         # Display best policy for each sub-query
         for i, search_result in enumerate(result["results"], 1):
             sub_query = search_result["sub_query"]
@@ -443,6 +445,19 @@ IMPORTANT: Do not return any other text than the list of sub-queries.
                             f"      Q-table shape: {q_table.shape if hasattr(q_table, 'shape') else 'N/A'}"
                         )
                         print("      Q-table available: Yes")
+
+                    if best_policy.get("dag") is not None:
+                        dag = best_policy.get("dag")
+
+                        print(
+                            "      DAG type:",
+                            type(dag).__name__
+                        )
+
+                        print("      DAG available: Yes")
+
+                        dags_to_combine.append(dag)
+
                 else:
                     # Show key metrics
                     if best_policy.get("energy_consumption") is not None:
@@ -459,12 +474,46 @@ IMPORTANT: Do not return any other text than the list of sub-queries.
                             f"      Q-table shape: {q_table.shape if hasattr(q_table, 'shape') else 'N/A'}"
                         )
                         print("      Q-table available: Yes")
+
+                    if best_policy.get("dag") is not None:
+                        dag = best_policy.get("dag")
+
+                        print(
+                            "      DAG type:",
+                            type(dag).__name__
+                        )
+
+                        print("      DAG available: Yes")
+
+                        dags_to_combine.append(dag)
             else:
                 print("   No policies found")
 
             print()
             print("-" * 80)
             print()
+
+        from pruning import run_pruning
+
+        if len(dags_to_combine) == 2:
+            combined_env = init_gridworld_rand(reward_system="combined", seed=seed)
+            dag_1 = dags_to_combine[0]
+            dag_2 = dags_to_combine[1]
+            learning_rate = 0.1
+            discount_factor = 0.99
+            print("Start graph composition algorithm.")
+            best_path, cumulative_reward_pruning, total_time, pruning_percentage = run_pruning(
+                combined_env,
+                dag_1=dag_1, dag_2=dag_2,
+                discount_factor=discount_factor,
+                learning_rate=learning_rate
+            )
+
+            print("=== Pruning Results ===")
+            print(f"Best Path:               {best_path}")
+            print(f"Cumulative Reward:       {cumulative_reward_pruning}")
+            print(f"Total Time (seconds):    {total_time:.4f}")
+            print(f"Pruning Percentage:      {pruning_percentage:.2f}%")
 
         return result
 
@@ -569,6 +618,8 @@ IMPORTANT: Do not return any other text than the list of sub-queries.
         )
         print()
 
+        dags_to_combine = []
+
         # Display results
         for result in results:
             policy_name = result.get("policy_name", result.get("name", "N/A"))
@@ -596,6 +647,18 @@ IMPORTANT: Do not return any other text than the list of sub-queries.
                         f"   Q-table shape: {q_table.shape if hasattr(q_table, 'shape') else 'N/A'}"
                     )
                     print("   Q-table available: Yes")
+
+                if result.get("dag") is not None:
+                    dag = result.get("dag")
+
+                    print(
+                        "      DAG type:",
+                        type(dag).__name__
+                    )
+
+                    print("      DAG available: Yes")
+
+                dags_to_combine.append(dag)
             else:
                 # Show key metrics based on optimization
                 if optimize_by == "inference_time":
@@ -621,7 +684,18 @@ IMPORTANT: Do not return any other text than the list of sub-queries.
                     )
                     print("   Q-table available: Yes")
 
+                if result.get("dag") is not None:
+                    dag = result.get("dag")
+
+                    print(
+                        "      DAG type:",
+                        type(dag).__name__
+                    )
+
+                    print("      DAG available: Yes")
+                    dags_to_combine.append(dag)
             print()
+
 
         return results, timing
 
@@ -671,7 +745,7 @@ def main():
         args.description,
         seed=args.seed,
         filter_energy=args.filter_energy,
-        show_all_metrics=args.show_all,
+        show_all_metrics=True, #args.show_all,
     )
 
 

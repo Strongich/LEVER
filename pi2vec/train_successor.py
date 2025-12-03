@@ -1,5 +1,6 @@
 import json
 import os
+import pickle
 from typing import List, Tuple
 
 import numpy as np
@@ -95,7 +96,7 @@ def main():
         # Load Q-table from episode folder
         episode_id = r.episode_id
         seed_name = r.seed_name
-        episode_str = f"episode_{int(episode_id):06d}"
+        episode_str = f"episode_{int(episode_id):05d}"
         q_table_path = os.path.join(
             os.getcwd(),
             "states_f",
@@ -115,6 +116,24 @@ def main():
             except Exception as e:
                 print(f"Warning: Could not load Q-table from {q_table_path}: {e}")
 
+        dag_path = os.path.join(
+            os.getcwd(),
+            "states_f",
+            policy_target,
+            seed_name,
+            "episodes",
+            episode_str,
+            "dag.pkl",
+        )
+
+        dag = None
+        if os.path.exists(dag_path):
+            try:
+                with open(dag_path, "rb") as f:
+                    dag = pickle.load(f)
+            except Exception as e:
+                print(f"Warning: Could not load DAG from {dag_path}: {e}")
+
         faiss_entry = {
             "policy_target": policy_target,
             "policy_seed": policy_seed,
@@ -123,6 +142,7 @@ def main():
             "reward": reward,
             "policy_embedding": policy_embedding,
             "q_table": q_table,  # Q-table as list (or None if not found)
+            "dag": dag,
             # example values
             "energy_consumption": round(np.random.uniform(0, 1), 3),
         }

@@ -185,7 +185,7 @@ def state_to_vector(state: np.ndarray) -> np.ndarray:
 
 def get_episode_path(base_dir, policy, seed, episode_id):
     # episode_id is an integer, need to pad to 6 digits
-    episode_str = f"episode_{int(episode_id):06d}"
+    episode_str = f"episode_{int(episode_id):05d}"
     return os.path.join(
         base_dir,
         "states_f",
@@ -375,8 +375,9 @@ def process_states():
     print(f"Found {len(common_seed_names)} common seeds")
 
     # Select only 10% of common seeds
-    num_seeds_to_use = max(1, int(len(common_seed_names) * 0.1))
-    selected_seed_names = random.sample(common_seed_names, num_seeds_to_use)
+    # num_seeds_to_use = max(1, int(len(common_seed_names) * 0.1))
+    # selected_seed_names = random.sample(common_seed_names, num_seeds_to_use)
+    selected_seed_names = common_seed_names
 
     print(
         f"Using {len(selected_seed_names)} common seeds (10% of {len(common_seed_names)})"
