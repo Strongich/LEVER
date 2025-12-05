@@ -1,21 +1,29 @@
+import os
 import pickle
-
-from inference_q import inference_q
-import numpy as np
-from agents.q_agent import QLearningAgent
-from agents.q_agent import SarsaAgent
-from DAG import DAG
 import time
-import pandas as pd
+from datetime import datetime
 
+import numpy as np
+import pandas as pd
+from agents.q_agent import QLearningAgent, SarsaAgent
+from inference_q import inference_q
 from my_work.init_gridworld import init_gridworld_rand
 from utilities import plot_cummulative_reward
-from datetime import datetime
-import os
+
+from policy_reusability.DAG import DAG
 
 
-def train_q_policy_transitions(grid_world, n_episodes, max_steps_per_episode, agent_type, output_path, learning_rate=None,
-                   discount_factor=None, result_step_size=1, plot_cumulative_reward=False):
+def train_q_policy_transitions(
+    grid_world,
+    n_episodes,
+    max_steps_per_episode,
+    agent_type,
+    output_path,
+    learning_rate=None,
+    discount_factor=None,
+    result_step_size=1,
+    plot_cumulative_reward=False,
+):
     # Flatten the grid to get the total number of states
     n_states = np.prod(grid_world.grid.shape)
 
@@ -29,9 +37,17 @@ def train_q_policy_transitions(grid_world, n_episodes, max_steps_per_episode, ag
     # Initialize the Q-Learning agent
     q_agent = None
     if agent_type == "QLearning":
-        q_agent = QLearningAgent(n_states=n_states, n_actions=n_actions, exploration_rate_decay=exploration_rate_decay)
+        q_agent = QLearningAgent(
+            n_states=n_states,
+            n_actions=n_actions,
+            exploration_rate_decay=exploration_rate_decay,
+        )
     elif agent_type == "Sarsa":
-        q_agent = SarsaAgent(n_states=n_states, n_actions=n_actions, exploration_rate_decay=exploration_rate_decay)
+        q_agent = SarsaAgent(
+            n_states=n_states,
+            n_actions=n_actions,
+            exploration_rate_decay=exploration_rate_decay,
+        )
 
     # check if we want to hardcode lr and df by using input parameters
     if learning_rate != None:
@@ -57,7 +73,9 @@ def train_q_policy_transitions(grid_world, n_episodes, max_steps_per_episode, ag
         state_index = grid_world.state_to_index(grid_world.agent_position)
 
         for step in range(max_steps_per_episode):
-            grid_world.visited_count_states[grid_world.agent_position[0]][grid_world.agent_position[1]] += 1
+            grid_world.visited_count_states[grid_world.agent_position[0]][
+                grid_world.agent_position[1]
+            ] += 1
             action = q_agent.get_action(state_index)
 
             grid, reward, done, info = grid_world.step(action)
@@ -67,12 +85,16 @@ def train_q_policy_transitions(grid_world, n_episodes, max_steps_per_episode, ag
 
             if agent_type == "Sarsa":
                 next_action = q_agent.get_action(next_state_index)
-                q_agent.update_q_table(state_index, action, reward, next_state_index, next_action)
+                q_agent.update_q_table(
+                    state_index, action, reward, next_state_index, next_action
+                )
             elif agent_type == "QLearning":
                 q_agent.update_q_table(state_index, action, reward, next_state_index)
 
-            if (state_index != next_state_index):
-                transition_history.add((state_index.item(), action, reward, next_state_index.item()))
+            if state_index != next_state_index:
+                transition_history.add(
+                    (state_index.item(), action, reward, next_state_index.item())
+                )
                 dag.add_edge(state_index, next_state_index, reward)
 
             state_index = next_state_index
@@ -81,8 +103,10 @@ def train_q_policy_transitions(grid_world, n_episodes, max_steps_per_episode, ag
                 break
 
         # update lerning rate and explortion rate
-        q_agent.exploration_rate = max(q_agent.exploration_rate * q_agent.exploration_rate_decay,
-                                       q_agent.min_exploration_rate)
+        q_agent.exploration_rate = max(
+            q_agent.exploration_rate * q_agent.exploration_rate_decay,
+            q_agent.min_exploration_rate,
+        )
 
         # turn of stopwatch
         elapsed_time = time.time() - start_time
@@ -92,17 +116,33 @@ def train_q_policy_transitions(grid_world, n_episodes, max_steps_per_episode, ag
 
         if episode % result_step_size == 0:
             df.at[(episode / result_step_size) + 1, csv_index_episode] = episode
-            df.at[(episode / result_step_size) + 1, csv_index_cummulative_reward] = cumulative_reward
+            df.at[(episode / result_step_size) + 1, csv_index_cummulative_reward] = (
+                cumulative_reward
+            )
 
     # Save the q_table for future use
-    csv_file_name = "Train_" + grid_world.reward_system + "_" + agent_type + "_" + str(n_episodes) + ".csv"
+    csv_file_name = (
+        "Train_"
+        + grid_world.reward_system
+        + "_"
+        + agent_type
+        + "_"
+        + str(n_episodes)
+        + ".csv"
+    )
     # df.to_csv(csv_file_name, index=False, header=header)
     if plot_cumulative_reward:
         plot_cummulative_reward(csv_file_name, header[0], header[1])
     np.save(output_path, q_agent.q_table)
     # run.finish()
 
-    return total_time, dag, cumulative_reward, grid_world.visited_count_transitions, transition_history
+    return (
+        total_time,
+        dag,
+        cumulative_reward,
+        grid_world.visited_count_transitions,
+        transition_history,
+    )
 
 
 def main():
@@ -154,11 +194,10 @@ def main():
 
         # ======== Evaluate trained agent ========
         best_path, cumulative_reward, path = inference_q(
-            grid_world=grid_world,
-            q_table_path=q_table_output_path
+            grid_world=grid_world, q_table_path=q_table_output_path
         )
 
-        print(f"\nEvaluation results:")
+        print("\nEvaluation results:")
         print(f"Cumulative reward: {cumulative_reward}")
         print(f"Best path found: {path}")
 

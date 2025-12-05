@@ -24,6 +24,22 @@ class DAG:
         self.action_size = gridworld.action_count
         self.env_length = gridworld.grid_length
         self.start_node = gridworld.state_to_index(gridworld.start_position)
+        # Cache state/action lookups to reduce repeated conversions during graph ops
+        self._state_cache = {
+            idx: GridWorld.index_to_state(idx, self.env_length)
+            for idx in self.graph.nodes
+        }
+        self._action_cache = {}
+        # Static position sets for fast reward lookups
+        self._gold_positions = (
+            set(tuple(pos) for pos in getattr(gridworld, "gold_positions", []) or [])
+        )
+        self._block_positions = (
+            set(tuple(pos) for pos in getattr(gridworld, "block_positions", []) or [])
+        )
+        self._target_position = tuple(getattr(gridworld, "target_position", ()))
+        self._block_reward = getattr(gridworld, "block_reward", 0)
+        self._target_reward = getattr(gridworld, "target_reward", 0)
 
     def add_edge(self, a, b):
         self.graph.add_edge(a, b)
@@ -31,26 +47,34 @@ class DAG:
     # This has been implemented for the gridworld environment with two actions: right and down
 
     def obtain_action(self, state_1_index, state_2_index):
-        state_1 = GridWorld.index_to_state(state_1_index, self.env_length)
-        state_2 = GridWorld.index_to_state(state_2_index, self.env_length)
+        key = (state_1_index, state_2_index)
+        if key in self._action_cache:
+            return self._action_cache[key]
+
+        state_1 = self._state_cache[state_1_index]
+        state_2 = self._state_cache[state_2_index]
 
         # down
         if state_2[0] == state_1[0] + 1 and state_2[1] == state_1[1]:
-            return 1
+            action = 1
         # right
         elif state_2[0] == state_1[0] and state_2[1] == state_1[1] + 1:
-            return 0
+            action = 0
         # down*2
-        if state_2[0] == state_1[0] + 2 and state_2[1] == state_1[1]:
-            return 3
+        elif state_2[0] == state_1[0] + 2 and state_2[1] == state_1[1]:
+            action = 3
         # right*2
         elif state_2[0] == state_1[0] and state_2[1] == state_1[1] + 2:
-            return 2
+            action = 2
         # diagonal
         elif state_2[0] == state_1[0] + 1 and state_2[1] == state_1[1] + 1:
-            return 4
+            action = 4
         else:
+            action = None
             print("Action could not be obtained")
+
+        self._action_cache[key] = action
+        return action
 
     # This has been implemented for the gridworld environment with two actions: right and down
     # def obtain_action(self, state_1_index, state_2_index):
@@ -130,9 +154,24 @@ class DAG:
         return dag
 
     def min_max_iter(self):
-        return self.max_iter(), self.min_iter()
+        graph_views = self._graph_views()
+        return self.max_iter(graph_views=graph_views), self.min_iter(
+            graph_views=graph_views
+        )
 
-    def max_iter(self):
+    def _graph_views(self):
+        topo_order = list(nx.topological_sort(self.graph))
+        topo_position = {node: idx for idx, node in enumerate(topo_order)}
+        predecessors = {
+            node: list(self.graph.predecessors(node)) for node in self.graph.nodes
+        }
+        successors = {
+            node: list(self.graph.successors(node)) for node in self.graph.nodes
+        }
+        return predecessors, successors, topo_position
+
+    def max_iter(self, graph_views=None):
+        predecessors, _, topo_position = graph_views or self._graph_views()
         visited = set()
         queue = deque([self.end_node])
         max_iterations = {node: [0] * self.action_size for node in self.graph.nodes}
@@ -140,70 +179,84 @@ class DAG:
         while queue:
             next_node = queue.popleft()
             visited.add(next_node)
-            adding_candidates = []
+            preds = sorted(
+                predecessors.get(next_node, ()),
+                key=lambda n: topo_position[n],
+                reverse=True,
+            )
 
-            for node in self.graph.predecessors(next_node):
+            in_degree_next = len(preds)
+            next_values = max_iterations[next_node]
+            next_total = sum(next_values)
+
+            for node in preds:
                 if node not in visited and node not in queue:
-                    adding_candidates.append(node)
+                    queue.append(node)
+
                 action = self.obtain_action(node, next_node)
                 if next_node == self.end_node:
-                    max_iterations[node][action] = self.N - (
-                        self.graph.in_degree(next_node) - 1
-                    )
+                    max_iterations[node][action] = self.N - (in_degree_next - 1)
                 else:
-                    total = sum(
-                        max_iterations[next_node][i] for i in range(self.action_size)
-                    )
-                    if (self.graph.in_degree(next_node) == 1) and (total > self.N):
+                    if (in_degree_next == 1) and (next_total > self.N):
                         max_iterations[node][action] = self.N
-                    elif (self.graph.in_degree(next_node) > 1) and (total > self.N):
-                        max_iterations[node][action] = self.N - (
-                            self.graph.in_degree(next_node) - 1
-                        )
+                    elif (in_degree_next > 1) and (next_total > self.N):
+                        max_iterations[node][action] = self.N - (in_degree_next - 1)
                     else:
-                        max_iterations[node][action] = total - (
-                            self.graph.in_degree(next_node) - 1
-                        )
-                # this is where we should add the nodes from adding candidates to the queue
-                for i in range(len(adding_candidates)):
-                    for j in range(i + 1, len(adding_candidates)):
-                        if self.graph.has_edge(
-                            adding_candidates[i], adding_candidates[j]
-                        ):
-                            adding_candidates[i], adding_candidates[j] = (
-                                adding_candidates[j],
-                                adding_candidates[i],
-                            )
-                queue.extend(adding_candidates)
+                        max_iterations[node][action] = next_total - (in_degree_next - 1)
         return max_iterations
 
-    def calculate_itr_nodes(self):
+    def calculate_itr_nodes(self, graph_views=None):
+        _, successors, _ = graph_views or self._graph_views()
         itr = [0] * self.graph.number_of_nodes()
+        in_degrees = self.graph.in_degree
+        out_degrees = self.graph.out_degree
 
         for i in range(self.graph.number_of_nodes()):
-            graph_copy = self.graph.copy()
-            graph_copy.remove_node(i)
-            # if node is disconnected from the whole graph, simply ignore it
             if i == self.start_node or i == self.end_node:
                 itr[i] = self.N
-            elif not nx.has_path(
-                graph_copy, source=self.start_node, target=self.end_node
-            ):
+                continue
+
+            if not self._has_path_without_node(successors, i):
                 itr[i] = self.N
-            else:
-                itr[i] = max(self.graph.in_degree(i), self.graph.out_degree(i))
+                continue
+
+            itr[i] = max(in_degrees(i), out_degrees(i))
         return itr
 
-    def min_iter(self):
+    def _has_path_without_node(self, successors, blocked_node):
+        if self.start_node == blocked_node or self.end_node == blocked_node:
+            return False
+
+        visited = {blocked_node}
+        queue = deque([self.start_node])
+
+        while queue:
+            node = queue.popleft()
+            for nxt in successors.get(node, ()):
+                if nxt in visited or nxt == blocked_node:
+                    continue
+                if nxt == self.end_node:
+                    return True
+                visited.add(nxt)
+                queue.append(nxt)
+
+        return False
+
+    def min_iter(self, graph_views=None):
+        predecessors, _, topo_position = graph_views or self._graph_views()
         visited = set()
         queue = deque([self.end_node])
         min_iterations = {node: [0] * self.action_size for node in self.graph.nodes}
-        itr = self.calculate_itr_nodes()
+        itr = self.calculate_itr_nodes(graph_views=graph_views)
 
         while queue:
             next_node = queue.popleft()
             visited.add(next_node)
-            for node in self.graph.predecessors(next_node):
+            for node in sorted(
+                predecessors.get(next_node, ()),
+                key=lambda n: topo_position[n],
+                reverse=True,
+            ):
                 if node not in visited and node not in queue:
                     queue.append(node)
                 action = self.obtain_action(node, next_node)
@@ -218,7 +271,10 @@ class DAG:
                     min_iterations[node][action] = 1
         return min_iterations
 
-    def backtrack(self, min_iterations, max_iterations, learning_rate, discount_factor):
+    def backtrack(
+        self, min_iterations, max_iterations, learning_rate, discount_factor
+    ):
+        predecessors, _, topo_position = self._graph_views()
         visited = set()
         queue = deque([self.end_node])
         lower_Qs = {node: [0] * self.action_size for node in self.graph.nodes}
@@ -227,11 +283,14 @@ class DAG:
         while queue:
             next_node = queue.popleft()
             visited.add(next_node)
-            adding_candidates = []
 
-            for node in self.graph.predecessors(next_node):
+            for node in sorted(
+                predecessors.get(next_node, ()),
+                key=lambda n: topo_position[n],
+                reverse=True,
+            ):
                 if node not in visited and node not in queue:
-                    adding_candidates.append(node)
+                    queue.append(node)
 
                 action = self.obtain_action(node, next_node)
                 min_iter, max_iter = (
@@ -239,12 +298,8 @@ class DAG:
                     max_iterations[node][action],
                 )
 
-                # NOTE: update lower and uppder bounds
-                reward = self.calculate_reward(
-                    self.gridworld.index_to_state(node, self.env_length),
-                    self.gridworld.index_to_state(next_node, self.env_length),
-                )
-                # Assuming max_iters is a dictionary with nodes as keys and lists as values
+                # NOTE: update lower and upper bounds
+                reward = self._calculate_reward_from_indices(node, next_node)
                 next_max = max(
                     max_iterations[next_node][i] for i in range(self.action_size)
                 )
@@ -271,24 +326,51 @@ class DAG:
                     + (learning_rate * discount_factor * next_min),
                     2,
                 )
-
-                # this is where we should add the nodes from adding candidates
-                for i in range(len(adding_candidates)):
-                    for j in range(i + 1, len(adding_candidates)):
-                        if self.graph.has_edge(
-                            adding_candidates[i], adding_candidates[j]
-                        ):
-                            adding_candidates[i], adding_candidates[j] = (
-                                adding_candidates[j],
-                                adding_candidates[i],
-                            )
-                queue.extend(adding_candidates)
         return lower_Qs, upper_Qs
 
     def calculate_reward(self, state, next_state):
         self.gridworld.agent_position = next_state
         reward = self.gridworld._get_reward(state)
         return reward
+
+    def _calculate_reward_from_indices(self, state_index, next_state_index):
+        state = self._state_cache[state_index]
+        next_state = self._state_cache[next_state_index]
+        return self.calculate_reward(state, next_state)
+
+    def _reward_path_static(self, current_state, next_state):
+        if next_state in self._block_positions:
+            return self._block_reward
+        if next_state == self._target_position:
+            return self._target_reward
+        d1 = sum(abs(a - b) for a, b in zip(current_state, self._target_position))
+        d2 = sum(abs(a - b) for a, b in zip(next_state, self._target_position))
+        return d1 - d2
+
+    def _reward_gold_static(self, next_state):
+        if next_state in self._block_positions:
+            return self._block_reward
+        if next_state == self._target_position:
+            return self._target_reward
+        return 1 if next_state in self._gold_positions else 0
+
+    def _edge_reward_static(self, state_index, next_state_index):
+        # Replicates combined reward logic without mutating GridWorld state
+        current_state = self._state_cache[state_index]
+        next_state = self._state_cache[next_state_index]
+        reward_system = getattr(self.gridworld, "reward_system", "path")
+
+        if reward_system == "path":
+            return self._reward_path_static(current_state, next_state)
+        if reward_system == "gold":
+            return self._reward_gold_static(next_state)
+        if reward_system == "combined":
+            return self._reward_gold_static(next_state) + self._reward_path_static(
+                current_state, next_state
+            )
+
+        # Fallback to original (may mutate env) for unsupported reward systems
+        return self._calculate_reward_from_indices(state_index, next_state_index)
 
     def compute_pruning_percentage(self, edge_count_before, edge_count_after):
         reduced_edge_count = edge_count_before - edge_count_after
@@ -303,15 +385,21 @@ class DAG:
         while queue:
             node = queue.popleft()
             visited.add(node)
-            remove = []
+            remove = set()
             next_nodes = list(self.graph.successors(node))
             if len(next_nodes) == 1:
                 queue.append(next_nodes[0])
             else:
+                bounds = {}
                 for next_node in next_nodes:
                     action = self.obtain_action(node, next_node)
-                    lower_bound = lower_bounds[node][action]
-                    upper_bound = upper_bounds[node][action]
+                    bounds[next_node] = (
+                        lower_bounds[node][action],
+                        upper_bounds[node][action],
+                    )
+
+                for next_node in next_nodes:
+                    lower_bound, upper_bound = bounds[next_node]
                     for next_node_2 in next_nodes:
                         if (
                             (next_node == next_node_2)
@@ -319,23 +407,18 @@ class DAG:
                             or ((node, next_node_2) in remove)
                         ):
                             continue
+
+                        lower_bound_2, upper_bound_2 = bounds[next_node_2]
+                        if upper_bound_2 <= lower_bound:
+                            remove.add((node, next_node_2))
                         else:
-                            action_2 = self.obtain_action(node, next_node_2)
-                            upper_bound_2 = upper_bounds[node][action_2]
-                            lower_bound_2 = lower_bounds[node][action_2]
+                            if (
+                                next_node_2 not in queue
+                                and next_node_2 not in visited
+                            ):
+                                queue.append(next_node_2)
 
-                            if upper_bound_2 <= lower_bound:
-                                # print("Edge removed: " + str((node, next_node_2)))
-                                remove.append((node, next_node_2))
-                            else:
-                                if (
-                                    next_node_2 not in queue
-                                    and next_node_2 not in visited
-                                ):
-                                    queue.append(next_node_2)
-                    # if remove != []:
-                    #     print("removed edges:", str(remove))
-
+                if remove:
                     self.graph.remove_edges_from(remove)
         edge_count_after = self.graph.number_of_edges()
         pruning_percentage = self.compute_pruning_percentage(
@@ -344,11 +427,39 @@ class DAG:
         return self.graph, pruning_percentage
 
     def find_paths(self):
-        paths = []
-        # x_start, y_start = self.gridworld.index_to_state(self.start_node, self.gridworld.grid_length)
-        # x_end, y_end = self.gridworld.index_to_state(self.end_node, self.gridworld.grid_length)
-        for path in nx.all_simple_paths(
+        # Return generator to avoid materializing all paths (can be very large)
+        return nx.all_simple_paths(
             self.graph, source=self.start_node, target=self.end_node
-        ):
-            paths.append(path)
-        return paths
+        )
+
+    def best_path_dp(self):
+        """
+        Compute best path with dynamic programming over DAG edges (O(E) time/O(V) mem).
+        Avoids enumerating all simple paths which is exponential for larger grids.
+        """
+        topological_order = list(nx.topological_sort(self.graph))
+        dist = {node: float("-inf") for node in self.graph.nodes}
+        parent = {}
+        dist[self.start_node] = 0
+
+        for node in topological_order:
+            if dist[node] == float("-inf"):
+                continue
+            for succ in self.graph.successors(node):
+                reward = self._edge_reward_static(node, succ)
+                candidate = dist[node] + reward
+                if candidate > dist[succ]:
+                    dist[succ] = candidate
+                    parent[succ] = node
+
+        if dist[self.end_node] == float("-inf"):
+            return None, float("-inf")
+
+        # Reconstruct best path
+        path = [self.end_node]
+        cur = self.end_node
+        while cur != self.start_node:
+            cur = parent[cur]
+            path.append(cur)
+        path.reverse()
+        return path, dist[self.end_node]

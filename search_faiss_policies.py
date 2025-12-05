@@ -16,11 +16,12 @@ from openai import OpenAI
 from pydantic import BaseModel
 
 from faiss_utils.setup_faiss_vdb import FaissVectorDB
-from my_work.init_gridworld import init_gridworld_rand
 from pi2vec.train_regressor import load_model
+from policy_reusability.my_work.init_gridworld import init_gridworld_rand
 
 # Load environment variables
 load_dotenv()
+
 
 class QueryDecompositionResponse(BaseModel):
     """Pydantic model for query decomposition response."""
@@ -449,10 +450,7 @@ IMPORTANT: Do not return any other text than the list of sub-queries.
                     if best_policy.get("dag") is not None:
                         dag = best_policy.get("dag")
 
-                        print(
-                            "      DAG type:",
-                            type(dag).__name__
-                        )
+                        print("      DAG type:", type(dag).__name__)
 
                         print("      DAG available: Yes")
 
@@ -478,10 +476,7 @@ IMPORTANT: Do not return any other text than the list of sub-queries.
                     if best_policy.get("dag") is not None:
                         dag = best_policy.get("dag")
 
-                        print(
-                            "      DAG type:",
-                            type(dag).__name__
-                        )
+                        print("      DAG type:", type(dag).__name__)
 
                         print("      DAG available: Yes")
 
@@ -493,7 +488,7 @@ IMPORTANT: Do not return any other text than the list of sub-queries.
             print("-" * 80)
             print()
 
-        from pruning import run_pruning
+        from policy_reusability.pruning import run_pruning
 
         if len(dags_to_combine) == 2:
             combined_env = init_gridworld_rand(reward_system="combined", seed=seed)
@@ -502,11 +497,14 @@ IMPORTANT: Do not return any other text than the list of sub-queries.
             learning_rate = 0.1
             discount_factor = 0.99
             print("Start graph composition algorithm.")
-            best_path, cumulative_reward_pruning, total_time, pruning_percentage = run_pruning(
-                combined_env,
-                dag_1=dag_1, dag_2=dag_2,
-                discount_factor=discount_factor,
-                learning_rate=learning_rate
+            best_path, cumulative_reward_pruning, total_time, pruning_percentage = (
+                run_pruning(
+                    combined_env,
+                    dag_1=dag_1,
+                    dag_2=dag_2,
+                    discount_factor=discount_factor,
+                    learning_rate=learning_rate,
+                )
             )
 
             print("=== Pruning Results ===")
@@ -514,6 +512,10 @@ IMPORTANT: Do not return any other text than the list of sub-queries.
             print(f"Cumulative Reward:       {cumulative_reward_pruning}")
             print(f"Total Time (seconds):    {total_time:.4f}")
             print(f"Pruning Percentage:      {pruning_percentage:.2f}%")
+        else:
+            print(
+                f"Skipping graph composition: found {len(dags_to_combine)} DAG(s); need 2 with 'dag' metadata."
+            )
 
         return result
 
@@ -651,10 +653,7 @@ IMPORTANT: Do not return any other text than the list of sub-queries.
                 if result.get("dag") is not None:
                     dag = result.get("dag")
 
-                    print(
-                        "      DAG type:",
-                        type(dag).__name__
-                    )
+                    print("      DAG type:", type(dag).__name__)
 
                     print("      DAG available: Yes")
 
@@ -687,15 +686,11 @@ IMPORTANT: Do not return any other text than the list of sub-queries.
                 if result.get("dag") is not None:
                     dag = result.get("dag")
 
-                    print(
-                        "      DAG type:",
-                        type(dag).__name__
-                    )
+                    print("      DAG type:", type(dag).__name__)
 
                     print("      DAG available: Yes")
                     dags_to_combine.append(dag)
             print()
-
 
         return results, timing
 
@@ -745,7 +740,7 @@ def main():
         args.description,
         seed=args.seed,
         filter_energy=args.filter_energy,
-        show_all_metrics=True, #args.show_all,
+        show_all_metrics=True,  # args.show_all,
     )
 
 
