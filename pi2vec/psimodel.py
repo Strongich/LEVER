@@ -40,9 +40,6 @@ class SuccessorFeatureNetwork(nn.Module):
             x = layer(x)
         return self.output_layer(x)
 
-    def get_state_embedding(self, s: torch.Tensor) -> torch.Tensor:
-        return self.first_layer(s)
-
 
 class SuccessorFeatureModel(nn.Module):
     def __init__(self, state_dim: int = 63):
@@ -51,9 +48,6 @@ class SuccessorFeatureModel(nn.Module):
 
     def forward(self, s: torch.Tensor) -> torch.Tensor:
         return self.network(s)
-
-    def get_state_embedding(self, s: torch.Tensor) -> torch.Tensor:
-        return self.network.get_state_embedding(s)
 
 
 class StateTransitionDataset(Dataset):
@@ -95,7 +89,7 @@ def bellman_loss(
     Returns:
         Mean squared Bellman loss
     """
-    phi_s = model.get_state_embedding(s)
+    phi_s = s
 
     with torch.no_grad():
         psi_s_next = model(s_next)
