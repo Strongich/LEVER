@@ -1,6 +1,7 @@
 import json
 import os
 import pickle
+import sys
 from typing import List, Tuple
 
 import numpy as np
@@ -16,6 +17,73 @@ from pi2vec.psimodel import (
     save_model,
     train_epoch,
 )
+
+# Import DAG and create module aliases for pickle compatibility
+from policy_reusability.DAG import DAG
+
+# Create module aliases for old import paths used in pickle files
+# This allows pickle to find classes even if they were saved with old paths
+if "DAG" not in sys.modules:
+    import policy_reusability.DAG as DAG_module
+
+    sys.modules["DAG"] = DAG_module
+
+# Create aliases for env module (used by GridWorld and other classes)
+if "env" not in sys.modules:
+    import policy_reusability.env as env_module
+
+    sys.modules["env"] = env_module
+
+if "env.gridworld" not in sys.modules:
+    import policy_reusability.env.gridworld as gridworld_module
+
+    sys.modules["env.gridworld"] = gridworld_module
+
+
+class DAGUnpickler(pickle.Unpickler):
+    """Custom unpickler to handle old DAG and env import paths."""
+
+    def find_class(self, module, name):
+        # Map old module paths to new ones
+        # Handle cases where objects were pickled with old import paths:
+        # - module="DAG", name="DAG" (from DAG import DAG)
+        # - module="env.DAG", name="DAG" (from env.DAG import DAG)
+        # - module="env.gridworld", name="GridWorld" (from env.gridworld import GridWorld)
+        # - module="policy_reusability.DAG", name="DAG" (current path)
+
+        # Handle DAG class
+        if name == "DAG":
+            return DAG
+
+        # Handle GridWorld from old env module
+        if name == "GridWorld" and (
+            module == "env.gridworld" or module.endswith(".env.gridworld")
+        ):
+            from policy_reusability.env.gridworld import GridWorld
+
+            return GridWorld
+
+        # For all other classes, try default behavior first
+        try:
+            return super().find_class(module, name)
+        except (ModuleNotFoundError, AttributeError) as e:
+            # If it's an env-related error, try to find the class in policy_reusability.env
+            if "env" in str(e) or "env" in module:
+                try:
+                    # Try to import from policy_reusability.env
+                    if "gridworld" in module:
+                        from policy_reusability.env.gridworld import GridWorld
+
+                        if name == "GridWorld":
+                            return GridWorld
+                except ImportError:
+                    pass
+
+            # If it's a DAG-related error, try to return DAG
+            if "DAG" in str(e) or name == "DAG":
+                return DAG
+
+            raise
 
 
 def train_and_save_successor_model(
@@ -130,7 +198,8 @@ def main():
         if os.path.exists(dag_path):
             try:
                 with open(dag_path, "rb") as f:
-                    dag = pickle.load(f)
+                    # Use custom unpickler to handle old import paths
+                    dag = DAGUnpickler(f).load()
             except Exception as e:
                 print(f"Warning: Could not load DAG from {dag_path}: {e}")
 
