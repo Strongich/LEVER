@@ -1,5 +1,6 @@
-from env.gridworld import GridWorld
 import random
+
+from policy_reusability.env.gridworld import GridWorld
 
 
 def init_gridworld_rand(reward_system, seed=42):
@@ -29,7 +30,7 @@ def init_gridworld_rand(reward_system, seed=42):
     # Randomly sample gold and block positions without overlap
     random.shuffle(all_positions)
     gold_positions = all_positions[:num_golds]
-    block_positions = all_positions[num_golds:num_golds + num_blocks]
+    block_positions = all_positions[num_golds : num_golds + num_blocks]
 
     # Convert to lists for GridWorld
     gold_positions_list = [list(pos) for pos in gold_positions]
@@ -68,7 +69,7 @@ def init_gridworld_rand(reward_system, seed=42):
         n=0,
         action_size=5,
         parameterized=False,
-        alpha_beta=(1, 1)
+        alpha_beta=(1, 1),
     )
 
     return grid_world

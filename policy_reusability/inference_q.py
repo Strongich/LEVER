@@ -1,26 +1,22 @@
-import numpy as np
-from env.gridworld import GridWorld
-from env.init_gridworld import init_gridworld_1
-import wandb
 import time
 
+import numpy as np
 
 # inference method
 # the q_table.npy file must be in the same directory as this file
 
-def inference_q(grid_world, q_table_path):
 
+def inference_q(grid_world, q_table_path):
     # Load the Q-table
     q_table = np.load(q_table_path)
 
-    #run = wandb.init(project="Inference_Q")
+    # run = wandb.init(project="Inference_Q")
     total_time = 0
     total_reward = 0
 
     # Reset the environment to its initial state
     grid_world.reset().flatten()
     state_index = grid_world.state_to_index(grid_world.agent_position)
-
 
     # Maximum number of steps for inference
     max_steps_inference = 100
@@ -54,7 +50,7 @@ def inference_q(grid_world, q_table_path):
         elapsed_time = time.time() - start_time
         total_time += elapsed_time
 
-        #wandb.log({"Total Inference Time": total_time}, step=step)
-    
-    #run.finish()
+        # wandb.log({"Total Inference Time": total_time}, step=step)
+
+    # run.finish()
     return total_time, total_reward, path

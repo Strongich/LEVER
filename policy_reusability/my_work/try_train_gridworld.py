@@ -1,6 +1,9 @@
-from train_q_policy import train_q_policy
 from inference_q import inference_q
-from env.gridworld import GridWorld  # assumes your GridWorld class is here
+from train_q_policy import train_q_policy
+
+from policy_reusability.env.gridworld import (
+    GridWorld,  # assumes your GridWorld class is here
+)
 
 
 def main():
@@ -53,7 +56,7 @@ def main():
         n=0,
         action_size=5,
         parameterized=False,
-        alpha_beta=(1, 1)
+        alpha_beta=(1, 1),
     )
 
     print("GridWorld initialized!")
@@ -79,7 +82,7 @@ def main():
         q_table_output_path,
         result_step_size=result_step_size,
         learning_rate=learning_rate,
-        discount_factor=discount_factor
+        discount_factor=discount_factor,
     )
 
     print(f"\nTraining finished in {total_time:.2f}s using {agent_type}")
@@ -87,11 +90,10 @@ def main():
 
     # ======== Evaluate trained agent ========
     best_path, cumulative_reward, path = inference_q(
-        grid_world=grid_world,
-        q_table_path=q_table_output_path
+        grid_world=grid_world, q_table_path=q_table_output_path
     )
 
-    print(f"\nEvaluation results:")
+    print("\nEvaluation results:")
     print(f"Cumulative reward: {cumulative_reward}")
     print(f"Best path found: {path}")
 
