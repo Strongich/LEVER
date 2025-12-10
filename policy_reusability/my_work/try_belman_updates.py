@@ -6,8 +6,15 @@ import numpy as np
 from my_work.init_gridworld import init_gridworld_rand
 
 
-def run_bellman_to_convergence(q_table, history, discount_factor,
-                               learning_rate, max_iters=1000, tol=1e-6, patience=10):
+def run_bellman_to_convergence(
+    q_table,
+    history,
+    discount_factor,
+    learning_rate,
+    max_iters=1000,
+    tol=1e-6,
+    patience=10,
+):
     """
     Run Bellman updates repeatedly until Q-table converges using a patience criterion.
 
@@ -34,7 +41,7 @@ def run_bellman_to_convergence(q_table, history, discount_factor,
             q_table=old_q_table,
             history=history,
             learning_rate=learning_rate,
-            discount_factor=discount_factor
+            discount_factor=discount_factor,
         )
 
         # Compute max absolute change
@@ -44,7 +51,7 @@ def run_bellman_to_convergence(q_table, history, discount_factor,
         if max_diff < tol:
             patience_counter += 1
             if patience_counter >= patience:
-                print(f"Converged after {i+1} iterations (max change {max_diff:.2e})")
+                print(f"Converged after {i + 1} iterations (max change {max_diff:.2e})")
                 break
         else:
             patience_counter = 0
@@ -109,7 +116,6 @@ def merge_transition_histories(history1, history2):
 
 
 def inference_q(grid_world, q_table):
-
     # run = wandb.init(project="Inference_Q")
     total_time = 0
     total_reward = 0
@@ -171,12 +177,11 @@ def main():
         q_tables[reward] = np.load(f"{base_dir}/{reward}/q_table_example.npy")
 
     merged_tr_history = merge_transition_histories(
-        transition_histories['gold'],
-        transition_histories['path']
+        transition_histories["gold"], transition_histories["path"]
     )
 
     # new_q_table = q_tables['gold'] + q_tables['path']
-    new_q_table = np.zeros_like(q_tables['gold'])
+    new_q_table = np.zeros_like(q_tables["gold"])
     new_q_table = run_bellman_to_convergence(
         q_table=new_q_table,
         history=merged_tr_history,
@@ -184,24 +189,24 @@ def main():
         learning_rate=1.0,
         max_iters=7000,
         tol=1e-6,
-        patience=10
+        patience=10,
     )
 
     grid_world = init_gridworld_rand("combined", seed=seed)
 
     best_path1, cumulative_reward1, path1 = inference_q(
-        grid_world=grid_world,
-        q_table=q_tables['combined']
+        grid_world=grid_world, q_table=q_tables["combined"]
     )
 
     best_path2, cumulative_reward2, path2 = inference_q(
-        grid_world=grid_world,
-        q_table=new_q_table
+        grid_world=grid_world, q_table=new_q_table
     )
 
-    print(f"Cumulative reward from training on combined environment: {cumulative_reward1}")
+    print(
+        f"Cumulative reward from training on combined environment: {cumulative_reward1}"
+    )
     print(f"Cumulative reward from Bellman updates: {cumulative_reward2}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

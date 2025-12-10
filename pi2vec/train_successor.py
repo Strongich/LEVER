@@ -90,9 +90,24 @@ def train_and_save_successor_model(
     policy_name: str,
     transitions: List[Tuple[np.ndarray, np.ndarray]],
     canonical_states: np.ndarray,
+    epochs: int = 50,
+    show_progress: bool = False,
 ):
     _, policy_seed, _ = policy_name.split("_")
-    model = SuccessorFeatureModel()
+
+    # Infer state_dim from the first transition
+    if len(transitions) > 0 and len(transitions[0]) > 0:
+        state_dim = transitions[0][0].shape[0]
+    else:
+        # Fallback: infer from canonical_states
+        if len(canonical_states) > 0:
+            state_dim = canonical_states[0].shape[0]
+        else:
+            raise ValueError(
+                "Cannot infer state_dim: no transitions or canonical states available"
+            )
+
+    model = SuccessorFeatureModel(state_dim=state_dim)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     dataset = StateTransitionDataset(transitions)
@@ -107,7 +122,12 @@ def train_and_save_successor_model(
         drop_last=False,  # Keep all data, but skip batch_size=1 in training loop
     )
     optimizer = Adam(model.parameters(), lr=3e-4)
-    for _ in range(50):
+    epoch_iter = range(epochs)
+    if show_progress:
+        epoch_iter = tqdm(
+            epoch_iter, desc=f"Training SF model {policy_name}", leave=False
+        )
+    for _ in epoch_iter:
         train_epoch(model, dataloader, optimizer, device=device)
         save_model(model, policy_name)
     policy_embeddings = []
@@ -128,8 +148,14 @@ def train_and_save_successor_model(
     return policy_seed, policy_embedding
 
 
-def main():
-    """Main function to train successor models and prepare training data."""
+def main(states_folder: str = "states_64", canonical_states: int = 64):
+    """
+    Main function to train successor models and prepare training data.
+
+    Args:
+        states_folder: Name of the folder containing states (e.g., "states_16", "states_64")
+        canonical_states: Total number of canonical states to collect (default: 64)
+    """
     from faiss_utils.setup_faiss_vdb import FaissVectorDB
 
     vdb = FaissVectorDB(
@@ -139,8 +165,12 @@ def main():
         "policy_embedding": [],
         "reward": [],
     }
-    canonical_states = np.array(create_canonical_states())
-    processed_states = process_states()
+    canonical_states_array = np.array(
+        create_canonical_states(
+            states_folder=states_folder, canonical_states=canonical_states
+        )
+    )
+    processed_states = process_states(states_folder=states_folder)
     for r in tqdm(
         processed_states.itertuples(),
         total=len(processed_states),
@@ -156,7 +186,7 @@ def main():
         reward = r.reward
         transitions = r.transitions
         policy_seed, policy_embedding = train_and_save_successor_model(
-            policy_name, transitions, canonical_states
+            policy_name, transitions, canonical_states_array
         )
         regressor_training_data["policy_embedding"].append(policy_embedding)
         regressor_training_data["reward"].append(reward)
@@ -164,10 +194,12 @@ def main():
         # Load Q-table from episode folder
         episode_id = r.episode_id
         seed_name = r.seed_name
-        episode_str = f"episode_{int(episode_id):05d}"
+        episode_str = (
+            f"episode_{int(episode_id):06d}"  # Use 6 digits to match folder structure
+        )
         q_table_path = os.path.join(
             os.getcwd(),
-            "states_f",
+            states_folder,
             policy_target,
             seed_name,
             "episodes",
@@ -186,11 +218,11 @@ def main():
 
         dag_path = os.path.join(
             os.getcwd(),
-            "states_f",
+            states_folder,
             policy_target,
             seed_name,
             "episodes",
-            episode_str,
+            episode_str,  # episode_str already uses 6 digits
             "dag.pkl",
         )
 
@@ -216,7 +248,12 @@ def main():
             "energy_consumption": round(np.random.uniform(0, 1), 3),
         }
         vdb.add_policy_from_kwargs(**faiss_entry)
-    vdb.save()
+
+    # Only save if index was initialized (i.e., at least one policy was added)
+    if vdb.index is not None:
+        vdb.save()
+    else:
+        print("Warning: No policies were processed. Skipping save.")
 
     # Save regressor training data to JSON
     # Convert numpy arrays to lists for JSON serialization

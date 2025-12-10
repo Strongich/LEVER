@@ -40,8 +40,14 @@ def check_regressor_trained():
     return os.path.exists(model_path)
 
 
-def main():
-    """Main preparation function."""
+def main(states_folder: str = "states_64", canonical_states: int = 64):
+    """
+    Main preparation function.
+
+    Args:
+        states_folder: Name of the folder containing states (e.g., "states_16", "states_64")
+        canonical_states: Total number of canonical states to collect (default: 64)
+    """
     print("=" * 80)
     print("pi2vec Framework Preparation")
     print("=" * 80)
@@ -57,7 +63,9 @@ def main():
         print("  Training successor models...")
         print()
         try:
-            train_successor_main()
+            train_successor_main(
+                states_folder=states_folder, canonical_states=canonical_states
+            )
             print()
             print("✓ Successor models training completed")
         except Exception as e:
@@ -122,4 +130,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main(states_folder="states_16", canonical_states=64)

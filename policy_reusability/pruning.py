@@ -1,11 +1,12 @@
-import networkx as nx
-
-from integer_programming import solve_IP
 import time
+
+from policy_reusability.integer_programming import solve_IP
+
 
 def compute_pruning(before, after):
     reduced_edge_count = before - after
     return (100 * reduced_edge_count) / before
+
 
 def get_best_path(gridworld, dag, paths):
     best_path = None
@@ -24,41 +25,45 @@ def get_best_path(gridworld, dag, paths):
             best_path = path
     return best_path, max_reward
 
+
 def run_pruning(gridworld, dag_1, dag_2, learning_rate, discount_factor):
     start_time = time.time()
     union_dag = dag_1.union(dag_2)
-    #print("Union DAG:")
+    # print("Union DAG:")
     union_dag.print()
     max_iterations, min_iterations = union_dag.min_max_iter()
     print("Min iterations: \n", min_iterations)
     print("Max iterations: \n", max_iterations)
-    lower_bounds, upper_bounds = union_dag.backtrack(min_iterations, max_iterations, learning_rate, discount_factor)
+    lower_bounds, upper_bounds = union_dag.backtrack(
+        min_iterations, max_iterations, learning_rate, discount_factor
+    )
     print("Run backtrack!")
 
     edge_count_before_prune = union_dag.graph.number_of_edges()
     pruned_graph, pruning_percentage = union_dag.prune(lower_bounds, upper_bounds)
 
-    paths = union_dag.find_paths()
-
     total_time = time.time() - start_time
-    best_path, max_reward = get_best_path(gridworld=gridworld, dag=union_dag, paths=paths)
+    best_path, max_reward = union_dag.best_path_dp()
     return best_path, max_reward, total_time, pruning_percentage
+
 
 def run_pruning_IP(gridworld, dag_1, dag_2, learning_rate, discount_factor, N):
     start_time = time.time()
     union_dag = dag_1.union(dag_2)
-    #print("Union DAG:")
+    # print("Union DAG:")
     union_dag.print()
-    max_iterations, min_iterations = solve_IP(union_dag, N, union_dag.start_node, union_dag.end_node)
+    max_iterations, min_iterations = solve_IP(
+        union_dag, N, union_dag.start_node, union_dag.end_node
+    )
     print("Min iterations: \n", min_iterations)
     print("Max iterations: \n", max_iterations)
-    lower_bounds, upper_bounds = union_dag.backtrack(min_iterations, max_iterations, learning_rate, discount_factor)
+    lower_bounds, upper_bounds = union_dag.backtrack(
+        min_iterations, max_iterations, learning_rate, discount_factor
+    )
 
-    #edge_count_before_prune = union_dag.graph.number_of_edges()
+    # edge_count_before_prune = union_dag.graph.number_of_edges()
     pruned_graph, pruning_percentage = union_dag.prune(lower_bounds, upper_bounds)
 
-    paths = union_dag.find_paths()
-
     total_time = time.time() - start_time
-    best_path, max_reward = get_best_path(gridworld=gridworld, dag=union_dag, paths=paths)
+    best_path, max_reward = union_dag.best_path_dp()
     return best_path, max_reward, total_time, pruning_percentage

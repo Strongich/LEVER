@@ -16,11 +16,12 @@ from openai import OpenAI
 from pydantic import BaseModel
 
 from faiss_utils.setup_faiss_vdb import FaissVectorDB
-from my_work.init_gridworld import init_gridworld_rand
 from pi2vec.train_regressor import load_model
+from policy_reusability.my_work.init_gridworld import init_gridworld_rand
 
 # Load environment variables
 load_dotenv()
+
 
 class QueryDecompositionResponse(BaseModel):
     """Pydantic model for query decomposition response."""
@@ -214,8 +215,8 @@ IMPORTANT: Do not return any other text than the list of sub-queries.
 
                 results = result_dict["results"]
 
-                # Filter by cosine similarity threshold (> 0.7)
-                similarity_threshold = 0.7
+                # Filter by cosine similarity threshold (> 0.6)
+                similarity_threshold = 0.6
                 similarity_filter_start = time.time()
                 results = [
                     r for r in results if r.get("score", 0) > similarity_threshold
@@ -449,10 +450,7 @@ IMPORTANT: Do not return any other text than the list of sub-queries.
                     if best_policy.get("dag") is not None:
                         dag = best_policy.get("dag")
 
-                        print(
-                            "      DAG type:",
-                            type(dag).__name__
-                        )
+                        print("      DAG type:", type(dag).__name__)
 
                         print("      DAG available: Yes")
 
@@ -478,10 +476,7 @@ IMPORTANT: Do not return any other text than the list of sub-queries.
                     if best_policy.get("dag") is not None:
                         dag = best_policy.get("dag")
 
-                        print(
-                            "      DAG type:",
-                            type(dag).__name__
-                        )
+                        print("      DAG type:", type(dag).__name__)
 
                         print("      DAG available: Yes")
 
@@ -493,20 +488,32 @@ IMPORTANT: Do not return any other text than the list of sub-queries.
             print("-" * 80)
             print()
 
-        from pruning import run_pruning
+        from policy_reusability.pruning import get_best_path, run_pruning
 
         if len(dags_to_combine) == 2:
-            combined_env = init_gridworld_rand(reward_system="combined", seed=seed)
+            # Evaluate the composed policy both via pruning DP reward and by simulating
+            # it in the actual combined GridWorld (to compare against a from-scratch policy).
+            # Normalize seed to int (argparse provides str); default to 0 if not provided
+            try:
+                effective_seed = int(seed) if seed is not None else 0
+            except ValueError:
+                effective_seed = 0
+            combined_env = init_gridworld_rand(
+                reward_system="combined", seed=effective_seed
+            )
             dag_1 = dags_to_combine[0]
             dag_2 = dags_to_combine[1]
             learning_rate = 0.1
             discount_factor = 0.99
             print("Start graph composition algorithm.")
-            best_path, cumulative_reward_pruning, total_time, pruning_percentage = run_pruning(
-                combined_env,
-                dag_1=dag_1, dag_2=dag_2,
-                discount_factor=discount_factor,
-                learning_rate=learning_rate
+            best_path, cumulative_reward_pruning, total_time, pruning_percentage = (
+                run_pruning(
+                    combined_env,
+                    dag_1=dag_1,
+                    dag_2=dag_2,
+                    discount_factor=discount_factor,
+                    learning_rate=learning_rate,
+                )
             )
 
             print("=== Pruning Results ===")
@@ -514,6 +521,19 @@ IMPORTANT: Do not return any other text than the list of sub-queries.
             print(f"Cumulative Reward:       {cumulative_reward_pruning}")
             print(f"Total Time (seconds):    {total_time:.4f}")
             print(f"Pruning Percentage:      {pruning_percentage:.2f}%")
+
+            # Re-evaluate the composed path by actually stepping in the env
+            union_dag_sim = dag_1.union(dag_2)
+            _, sim_reward = get_best_path(
+                combined_env, union_dag_sim, paths=[best_path]
+            )
+            print(
+                f"Simulated Reward (combined env, seed={effective_seed}): {sim_reward}"
+            )
+        else:
+            print(
+                f"Skipping graph composition: found {len(dags_to_combine)} DAG(s); need 2 with 'dag' metadata."
+            )
 
         return result
 
@@ -651,10 +671,7 @@ IMPORTANT: Do not return any other text than the list of sub-queries.
                 if result.get("dag") is not None:
                     dag = result.get("dag")
 
-                    print(
-                        "      DAG type:",
-                        type(dag).__name__
-                    )
+                    print("      DAG type:", type(dag).__name__)
 
                     print("      DAG available: Yes")
 
@@ -687,15 +704,11 @@ IMPORTANT: Do not return any other text than the list of sub-queries.
                 if result.get("dag") is not None:
                     dag = result.get("dag")
 
-                    print(
-                        "      DAG type:",
-                        type(dag).__name__
-                    )
+                    print("      DAG type:", type(dag).__name__)
 
                     print("      DAG available: Yes")
                     dags_to_combine.append(dag)
             print()
-
 
         return results, timing
 
@@ -745,7 +758,7 @@ def main():
         args.description,
         seed=args.seed,
         filter_energy=args.filter_energy,
-        show_all_metrics=True, #args.show_all,
+        show_all_metrics=True,  # args.show_all,
     )
 
 
