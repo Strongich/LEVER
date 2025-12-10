@@ -9,7 +9,7 @@ import joblib
 import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.linear_model import LinearRegression
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.metrics import mean_absolute_error, r2_score
 
 
 def load_training_data(json_path: str = "data/regressor_training_data.json"):
@@ -127,8 +127,6 @@ def plot_regression_results(
 
     # Calculate metrics
     r2 = r2_score(y_true, y_pred)
-    mse = mean_squared_error(y_true, y_pred)
-    rmse = np.sqrt(mse)
     mae = mean_absolute_error(y_true, y_pred)
     # NMAE: Normalized Mean Absolute Error (MAE / mean of actual values)
     nmae = mae / np.mean(np.abs(y_true)) if np.mean(np.abs(y_true)) > 0 else np.inf
@@ -177,7 +175,7 @@ def plot_regression_results(
     ax.set_title("Performance Predictor: Policy Embedding → Reward", fontsize=12)
 
     # Add metrics text
-    metrics_text = f"R² = {r2:.3f}\nRMSE = {rmse:.3f}\nNMAE = {nmae:.3f}"
+    metrics_text = f"R² = {r2:.3f}\nNMAE = {nmae:.3f}"
     ax.text(
         0.05,
         0.95,
@@ -210,6 +208,19 @@ def main():
     # Load training data
     print("Loading training data...")
     X, y = load_training_data()
+
+    # Check if we have any training data
+    if len(X) == 0:
+        raise ValueError(
+            "No training data found. The training data file is empty.\n"
+            "This means no policies were processed during successor model training.\n"
+            "Please check that your data files exist and are in the correct location."
+        )
+
+    # Handle case where X might be 1D (shouldn't happen, but be safe)
+    if X.ndim == 1:
+        X = X.reshape(-1, 1)
+
     print(f"✓ Loaded {len(X)} samples with {X.shape[1]} features")
 
     # Train model
@@ -226,15 +237,11 @@ def main():
 
     # Calculate and print metrics
     r2 = r2_score(y, y_pred)
-    mse = mean_squared_error(y, y_pred)
-    rmse = np.sqrt(mse)
     mae = mean_absolute_error(y, y_pred)
     nmae = mae / np.mean(np.abs(y)) if np.mean(np.abs(y)) > 0 else np.inf
 
     print("\nModel Performance:")
     print(f"  R² Score: {r2:.4f}")
-    print(f"  RMSE: {rmse:.4f}")
-    print(f"  MSE: {mse:.4f}")
     print(f"  MAE: {mae:.4f}")
     print(f"  NMAE: {nmae:.4f}")
 

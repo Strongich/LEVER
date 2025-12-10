@@ -31,6 +31,7 @@ class GridWorld(gym.Env):
         action_size=2,
         parameterized=False,
         alpha_beta=(1, 1),
+        step_penalty=0.0,
     ):
         super(GridWorld, self).__init__()
 
@@ -47,6 +48,7 @@ class GridWorld(gym.Env):
         self.block_positions = block_positions
         self.block_reward = block_reward
         self.target_reward = target_reward
+        self.step_penalty = step_penalty  # flat per-step cost to discourage long paths
         self.block_position_value = block_position_value
         self.gold_position_value = gold_position_value
         self.gold_k = gold_k
@@ -253,6 +255,9 @@ class GridWorld(gym.Env):
             np.abs(np.array(self.agent_position) - np.array(self.target_position))
         )
         r = d1 - d2
+        # Optional flat per-step penalty to discourage long paths
+        if self.step_penalty:
+            r -= self.step_penalty
         return r
 
     def get_reward_gold(self):

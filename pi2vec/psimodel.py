@@ -44,7 +44,9 @@ class SuccessorFeatureNetwork(nn.Module):
 class SuccessorFeatureModel(nn.Module):
     def __init__(self, state_dim: int = 63):
         super().__init__()
-        self.network = SuccessorFeatureNetwork()
+        self.network = SuccessorFeatureNetwork(
+            input_dim=state_dim, output_dim=state_dim
+        )
 
     def forward(self, s: torch.Tensor) -> torch.Tensor:
         return self.network(s)

@@ -3,21 +3,32 @@ import random
 from policy_reusability.env.gridworld import GridWorld
 
 
-def init_gridworld_rand(reward_system, seed=42):
+def init_gridworld_rand(reward_system, seed=42, grid_size=64):
     random.seed(seed)
 
     # ======== Environment setup ========
     # reward_system = "gold"
-    width_size = 16
-    length_size = 16
+    width_size = grid_size
+    length_size = grid_size
 
     # Define positions
     agent_initial_position = (0, 0)
     target_position = (width_size - 1, length_size - 1)
 
     # Parameters controlling density
-    num_golds = 50
-    num_blocks = 20
+    # Scale based on grid size: ~20% density
+    if grid_size == 16:
+        num_golds = 50
+        num_blocks = 50
+    elif grid_size == 64:
+        num_golds = 800
+        num_blocks = 800
+    else:
+        # Default: scale proportionally
+        density = 0.2
+        total_cells = grid_size * grid_size - 2  # Exclude agent and target
+        num_golds = int(total_cells * density)
+        num_blocks = int(total_cells * density)
 
     # Generate all possible coordinates except agent and target
     all_positions = [

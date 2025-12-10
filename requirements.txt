@@ -10,4 +10,7 @@ pandas
 tqdm
 scikit-learn
 matplotlib
+pulp
+networkx
+gym
 

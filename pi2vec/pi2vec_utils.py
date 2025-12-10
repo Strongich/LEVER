@@ -15,12 +15,13 @@ AGENT_POSITION_VALUE = 7
 
 # Feature vector constants
 STATE_HEAD_LEN = 13  # First 13 scalars before the variable manhattan list
-GMAX = 50  # Maximum number of golds to pad manhattan distances to
+GMAX_16 = 50  # Maximum number of golds to pad manhattan distances to
+GMAX_64 = 200  # Maximum number of golds to pad manhattan distances to
 
 
 def state_to_vector(state: np.ndarray) -> np.ndarray:
     """
-    Convert a GridWorld state (16x16 grid) into a fixed-size feature vector.
+    Convert a GridWorld state (NxN grid) into a fixed-size feature vector.
 
     The feature vector contains (in order):
     1. agent_xy: (x, y) normalized by N
@@ -33,20 +34,31 @@ def state_to_vector(state: np.ndarray) -> np.ndarray:
     8. manhattan_to_golds: Manhattan distances normalized by 2*N (sorted, padded/truncated to GMAX)
 
     Args:
-        state: numpy array of shape (16, 16) representing the GridWorld state
+        state: numpy array of shape (N, N) representing the GridWorld state (e.g., (16, 16) or (64, 64))
 
     Returns:
-        numpy array of shape (STATE_HEAD_LEN + GMAX,) = (63,) containing the flattened feature vector
+        numpy array of shape (STATE_HEAD_LEN + GMAX,) containing the flattened feature vector
+        where GMAX depends on grid size (GMAX_16=50 for 16x16, GMAX_64=200 for 64x64)
 
     Raises:
-        ValueError: If no agent or gold found in the state
+        ValueError: If state is not square, or if no agent or gold found in the state
         Note: If exit (value 10) is not found, it is assumed the agent is at the exit
               position (terminal state), and exit-related features are set to zero.
     """
-    if state.shape != (16, 16):
-        raise ValueError(f"Expected state shape (16, 16), got {state.shape}")
+    # Check if state is square
+    if len(state.shape) != 2 or state.shape[0] != state.shape[1]:
+        raise ValueError(f"Expected square state shape (N, N), got {state.shape}")
 
-    N = 16  # Grid size
+    N = state.shape[0]  # Grid size (inferred from state shape)
+
+    # Determine GMAX based on grid size
+    if N == 16:
+        GMAX = GMAX_16
+    elif N == 64:
+        GMAX = GMAX_64
+    else:
+        # Default to GMAX_16 for other sizes, but could be made configurable
+        GMAX = GMAX_16
 
     # Find agent position (x, y)
     agent_positions = np.argwhere(state == AGENT_POSITION_VALUE)
@@ -183,12 +195,14 @@ def state_to_vector(state: np.ndarray) -> np.ndarray:
     return feature_vector
 
 
-def get_episode_path(base_dir, policy, seed, episode_id):
-    # episode_id is an integer, need to pad to 6 digits
-    episode_str = f"episode_{int(episode_id):05d}"
+def get_episode_path(
+    base_dir, policy, seed, episode_id, states_folder: str = "states_64"
+):
+    # episode_id is an integer, need to pad to 6 digits (e.g., episode_047000)
+    episode_str = f"episode_{int(episode_id):06d}"
     return os.path.join(
         base_dir,
-        "states_f",
+        states_folder,
         policy,
         seed,
         "episodes",
@@ -197,32 +211,45 @@ def get_episode_path(base_dir, policy, seed, episode_id):
     )
 
 
-def create_canonical_states():
+def create_canonical_states(
+    states_folder: str = "states_64", canonical_states: int = 64
+):
     """
-    Randomly select 64 states (32 from gold, 32 from path), convert them to feature vectors
-    using state_to_vector(), and save them as data/canonical_states.npy.
+    Randomly select states (half from gold, half from path), convert them to feature vectors
+    using state_to_vector(), and save them as data/canonical_states_{states_folder}.npy.
     Only creates the file if it doesn't already exist.
 
+    Args:
+        states_folder: Name of the folder containing states (e.g., "states_16", "states_64")
+        canonical_states: Total number of canonical states to collect (default: 64).
+                         Half will be from gold policy, half from path policy.
+
     Returns:
-        numpy array of shape (64, STATE_HEAD_LEN + GMAX) = (64, 63) containing the canonical
+        numpy array of shape (canonical_states, STATE_HEAD_LEN + GMAX) containing the canonical
         state feature vectors, or None if file already exists
     """
     base_dir = os.getcwd()
-    output_path = os.path.join(base_dir, "data", "canonical_states.npy")
+    # Use folder-specific filename to avoid conflicts between different grid sizes
+    output_path = os.path.join(
+        base_dir, "data", f"canonical_states_{states_folder}.npy"
+    )
 
     # Check if file already exists
     if os.path.exists(output_path):
         print(
-            f"canonical_states.npy already exists at {output_path}. Skipping creation."
+            f"canonical_states_{states_folder}.npy already exists at {output_path}. Skipping creation."
         )
         return np.load(output_path)
 
+    # Calculate number of states per policy
+    states_per_policy = canonical_states // 2
+
     # Find all episode_states.npy files for each policy
     gold_pattern = os.path.join(
-        base_dir, "states_f", "gold", "**", "episode_states.npy"
+        base_dir, states_folder, "gold", "**", "episode_states.npy"
     )
     path_pattern = os.path.join(
-        base_dir, "states_f", "path", "**", "episode_states.npy"
+        base_dir, states_folder, "path", "**", "episode_states.npy"
     )
 
     gold_files = glob.glob(gold_pattern, recursive=True)
@@ -240,9 +267,9 @@ def create_canonical_states():
     random.shuffle(gold_files)
     random.shuffle(path_files)
 
-    # Collect 32 states from gold episodes
+    # Collect states from gold episodes
     for npy_path in gold_files:
-        if len(gold_states) >= 32:
+        if len(gold_states) >= states_per_policy:
             break
         try:
             states = np.load(npy_path)
@@ -271,9 +298,9 @@ def create_canonical_states():
             print(f"Error loading {npy_path}: {e}")
             continue
 
-    # Collect 32 states from path episodes
+    # Collect states from path episodes
     for npy_path in path_files:
-        if len(path_states) >= 32:
+        if len(path_states) >= states_per_policy:
             break
         try:
             states = np.load(npy_path)
@@ -303,10 +330,14 @@ def create_canonical_states():
             continue
 
     # Check if we have enough states
-    if len(gold_states) < 32:
-        print(f"Warning: Only collected {len(gold_states)} gold states (need 32)")
-    if len(path_states) < 32:
-        print(f"Warning: Only collected {len(path_states)} path states (need 32)")
+    if len(gold_states) < states_per_policy:
+        print(
+            f"Warning: Only collected {len(gold_states)} gold states (need {states_per_policy})"
+        )
+    if len(path_states) < states_per_policy:
+        print(
+            f"Warning: Only collected {len(path_states)} path states (need {states_per_policy})"
+        )
 
     # Combine into single array
     canonical_states = np.array(gold_states + path_states, dtype=np.float32)
@@ -321,11 +352,14 @@ def create_canonical_states():
     return canonical_states
 
 
-def process_states():
+def process_states(states_folder: str = "states_64"):
     """
     Process states from gold and path policies and save to data/processed_states.csv.
     Transitions are stored in memory as tuples of numpy arrays (np.array, np.array).
     If the file already exists, returns it as a pandas DataFrame without reprocessing.
+
+    Args:
+        states_folder: Name of the folder containing states (e.g., "states_16", "states_64")
 
     Returns:
         pandas DataFrame with columns: policy_target, policy_name, reward, transitions
@@ -355,8 +389,8 @@ def process_states():
     results = []
 
     # First, find seeds that exist in BOTH policies
-    gold_seed_pattern = os.path.join(base_dir, "states_f", "gold", "seed_*")
-    path_seed_pattern = os.path.join(base_dir, "states_f", "path", "seed_*")
+    gold_seed_pattern = os.path.join(base_dir, states_folder, "gold", "seed_*")
+    path_seed_pattern = os.path.join(base_dir, states_folder, "path", "seed_*")
 
     gold_seed_dirs = glob.glob(gold_seed_pattern)
     path_seed_dirs = glob.glob(path_seed_pattern)
@@ -379,9 +413,7 @@ def process_states():
     # selected_seed_names = random.sample(common_seed_names, num_seeds_to_use)
     selected_seed_names = common_seed_names
 
-    print(
-        f"Using {len(selected_seed_names)} common seeds (10% of {len(common_seed_names)})"
-    )
+    print(f"Using {len(selected_seed_names)} common seeds")
     print(f"Selected seeds: {selected_seed_names}")
 
     # Now process both policies using the same selected seeds
@@ -389,7 +421,7 @@ def process_states():
         print(f"\nProcessing policy: {policy}")
 
         for seed_name in selected_seed_names:
-            seed_dir = os.path.join(base_dir, "states_f", policy, seed_name)
+            seed_dir = os.path.join(base_dir, states_folder, policy, seed_name)
             rewards_file = os.path.join(seed_dir, "episode_rewards.csv")
 
             if not os.path.exists(rewards_file):
@@ -419,7 +451,9 @@ def process_states():
                 episode_id = row["episode"]
                 reward = row["reward"]
 
-                npy_path = get_episode_path(base_dir, policy, seed_name, episode_id)
+                npy_path = get_episode_path(
+                    base_dir, policy, seed_name, episode_id, states_folder
+                )
 
                 if not os.path.exists(npy_path):
                     print(f"Warning: {npy_path} not found. Skipping.")
