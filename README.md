@@ -129,6 +129,8 @@ python plots/hybrid_k_sweep_plot.py \
   --input-csv results/hybrid_k_sweep.csv \
   --results-dir results
 ```
+Note: `plots/hybrid_k_sweep_plot.py` uses results from `full_experiment.py` to
+create plots.
 
 4) Run full_experiment on 16x16 with k=3:
 ```bash
