@@ -95,6 +95,88 @@ Optional filters and controls:
 - `--filter-energy` to prefer low-energy policies.
 - `--no-decompose` to skip LLM decomposition.
 
+## Reproducibility
+The following commands reproduce the core results in the order used for 16x16
+and 32x32 grids.
+
+1) Generate 16x16 policies:
+```bash
+python policy_reusability/data_generation/generate_states_batch.py \
+  --output-root state_runs
+```
+
+2) Build π2vec assets (FAISS + regressor) for 16x16:
+```bash
+python pi2vec_preparation.py \
+  --base-dir state_runs \
+  --index-path faiss_index/policy.index \
+  --metadata-path faiss_index/metadata.pkl \
+  --regressor-data-path data/regressor_training_data.json \
+  --regressor-model-path models/reward_regressor.pkl \
+  --regressor-plot-path plots/regression_plot.jpeg
+```
+
+3) Run hybrid top-k sweep to find the best k (or skip and use k=3):
+```bash
+python hybrid_k_sweep.py \
+  --state-runs-dir state_runs \
+  --index-path faiss_index/policy.index \
+  --metadata-path faiss_index/metadata.pkl \
+  --regressor-model-path models/reward_regressor.pkl \
+  --output results/hybrid_k_sweep.csv
+
+python plots/hybrid_k_sweep_plot.py \
+  --input-csv results/hybrid_k_sweep.csv \
+  --results-dir results
+```
+
+4) Run full_experiment on 16x16 with k=3:
+```bash
+python full_experiment.py \
+  --loop-specs \
+  --states-folder state_runs \
+  --results-dir results \
+  --index-path faiss_index/policy.index \
+  --metadata-path faiss_index/metadata.pkl \
+  --hybrid-top-k 3
+```
+
+5) Generate 32x32 policies:
+```bash
+python policy_reusability/data_generation/generate_states_batch.py \
+  --output-root state_runs_32 \
+  --spec-set grid32
+```
+
+6) Build π2vec assets for 32x32 without training a new regressor:
+```bash
+python pi2vec_preparation.py \
+  --base-dir state_runs_32 \
+  --index-path faiss_index_32/policy.index \
+  --metadata-path faiss_index_32/metadata.pkl \
+  --regressor-data-path data/regressor_training_data_32.json \
+  --regressor-model-path models/reward_regressor.pkl \
+  --skip-regressor
+```
+
+7) Run full_experiment on 32x32 using the 16x16 regressor:
+```bash
+python full_experiment.py \
+  --loop-specs \
+  --states-folder state_runs_32 \
+  --results-dir results_32 \
+  --index-path faiss_index_32/policy.index \
+  --metadata-path faiss_index_32/metadata.pkl \
+  --hybrid-top-k 3
+```
+
+8) Optionally plot the total results:
+```bash
+python plots/compare_compositions_average.py \
+  --results-dir results \
+  --output figs/average_results.png
+```
+
 ## Project Structure
 ```
 .
