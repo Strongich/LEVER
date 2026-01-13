@@ -26,12 +26,18 @@ def get_best_path(gridworld, dag, paths):
     return best_path, max_reward
 
 
+def _min_max_from_dag(union_dag):
+    if getattr(union_dag, "edge_counts", None):
+        return union_dag.min_max_iter_from_counts()
+    return union_dag.min_max_iter()
+
+
 def run_pruning(gridworld, dag_1, dag_2, learning_rate, discount_factor):
     start_time = time.time()
-    union_dag = dag_1.union(dag_2)
+    union_dag = dag_1.union(dag_2, reward_system=gridworld.reward_system)
     # print("Union DAG:")
     union_dag.print()
-    max_iterations, min_iterations = union_dag.min_max_iter()
+    max_iterations, min_iterations = _min_max_from_dag(union_dag)
     print("Min iterations: \n", min_iterations)
     print("Max iterations: \n", max_iterations)
     lower_bounds, upper_bounds = union_dag.backtrack(
@@ -43,13 +49,13 @@ def run_pruning(gridworld, dag_1, dag_2, learning_rate, discount_factor):
     pruned_graph, pruning_percentage = union_dag.prune(lower_bounds, upper_bounds)
 
     total_time = time.time() - start_time
-    best_path, max_reward = union_dag.best_path_dp()
+    best_path, max_reward = union_dag.best_path_dp_stateful()
     return best_path, max_reward, total_time, pruning_percentage
 
 
 def run_pruning_IP(gridworld, dag_1, dag_2, learning_rate, discount_factor, N):
     start_time = time.time()
-    union_dag = dag_1.union(dag_2)
+    union_dag = dag_1.union(dag_2, reward_system=gridworld.reward_system)
     # print("Union DAG:")
     union_dag.print()
     max_iterations, min_iterations = solve_IP(
@@ -65,5 +71,23 @@ def run_pruning_IP(gridworld, dag_1, dag_2, learning_rate, discount_factor, N):
     pruned_graph, pruning_percentage = union_dag.prune(lower_bounds, upper_bounds)
 
     total_time = time.time() - start_time
-    best_path, max_reward = union_dag.best_path_dp()
+    best_path, max_reward = union_dag.best_path_dp_stateful()
+    return best_path, max_reward, total_time, pruning_percentage
+
+
+def run_pruning_multi(gridworld, dags, learning_rate, discount_factor, N):
+    start_time = time.time()
+    from policy_reusability.DAG import DAG
+
+    union_dag = DAG.union_of_graphs(
+        gridworld, dags, N, reward_system=gridworld.reward_system
+    )
+    union_dag.print()
+    max_iterations, min_iterations = _min_max_from_dag(union_dag)
+    lower_bounds, upper_bounds = union_dag.backtrack(
+        min_iterations, max_iterations, learning_rate, discount_factor
+    )
+    pruned_graph, pruning_percentage = union_dag.prune(lower_bounds, upper_bounds)
+    total_time = time.time() - start_time
+    best_path, max_reward = union_dag.best_path_dp_stateful()
     return best_path, max_reward, total_time, pruning_percentage

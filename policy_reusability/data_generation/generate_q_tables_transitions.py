@@ -5,12 +5,11 @@ from datetime import datetime
 
 import numpy as np
 import pandas as pd
-from agents.q_agent import QLearningAgent, SarsaAgent
-from inference_q import inference_q
-from my_work.init_gridworld import init_gridworld_rand
-from utilities import plot_cummulative_reward
-
 from policy_reusability.DAG import DAG
+from policy_reusability.agents.q_agent import QLearningAgent, SarsaAgent
+from policy_reusability.data_generation.gridworld_factory import init_gridworld_rand
+from policy_reusability.inference_q import inference_q
+from policy_reusability.utilities import plot_cummulative_reward
 
 
 def train_q_policy_transitions(
@@ -168,7 +167,7 @@ def main():
         # ======== Training parameters ========
         agent_type = "Sarsa"  # or "Q-learning"
         n_episodes = 300000
-        max_steps_per_episode = 16 + 16 + 1
+        max_steps_per_episode = grid_world.grid_width * grid_world.grid_length
         learning_rate = 0.1
         discount_factor = 0.99
         result_step_size = 10

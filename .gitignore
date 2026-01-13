@@ -7,7 +7,14 @@ __pycache__/
 *.so
 # models
 psi_models/
+psi_models_2/
 states_final/
+states_16/
+states_16_1/
+state_runs/
+state_runs_32/
+state_runs_6/
+data_2/
 states_f/
 faiss_index/
 __pycache__/

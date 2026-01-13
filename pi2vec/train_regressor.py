@@ -203,11 +203,15 @@ def plot_regression_results(
     print(f"✓ Plot saved to {png_path}")
 
 
-def main():
+def main(
+    training_data_path: str = "data/regressor_training_data.json",
+    model_path: str = "models/reward_regressor.pkl",
+    plot_path: str = "plots/regression_plot.jpeg",
+):
     """Main function to train regressor and generate plot."""
     # Load training data
     print("Loading training data...")
-    X, y = load_training_data()
+    X, y = load_training_data(json_path=training_data_path)
 
     # Check if we have any training data
     if len(X) == 0:
@@ -230,7 +234,7 @@ def main():
 
     # Save model
     print("\nSaving model...")
-    save_model(model, model_path="models/reward_regressor.pkl")
+    save_model(model, model_path=model_path)
 
     # Make predictions
     y_pred = model.predict(X)
@@ -247,7 +251,7 @@ def main():
 
     # Create and save plot
     print("\nGenerating regression plot...")
-    plot_regression_results(y, y_pred, save_path="plots/regression_plot.jpeg")
+    plot_regression_results(y, y_pred, save_path=plot_path)
 
     print("\n✓ Training complete!")
 

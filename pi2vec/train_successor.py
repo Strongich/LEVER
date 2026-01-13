@@ -93,7 +93,10 @@ def train_and_save_successor_model(
     epochs: int = 50,
     show_progress: bool = False,
 ):
-    _, policy_seed, _ = policy_name.split("_")
+    parts = policy_name.split("_")
+    if len(parts) < 2:
+        raise ValueError(f"Unexpected policy_name format: {policy_name}")
+    policy_seed = parts[-2]
 
     # Infer state_dim from the first transition
     if len(transitions) > 0 and len(transitions[0]) > 0:
@@ -121,7 +124,7 @@ def train_and_save_successor_model(
         num_workers=0,  # Set to 0 to avoid fork issues with tokenizers
         drop_last=False,  # Keep all data, but skip batch_size=1 in training loop
     )
-    optimizer = Adam(model.parameters(), lr=3e-4)
+    optimizer = Adam(model.parameters(), lr=1e-3)
     epoch_iter = range(epochs)
     if show_progress:
         epoch_iter = tqdm(
@@ -148,42 +151,86 @@ def train_and_save_successor_model(
     return policy_seed, policy_embedding
 
 
-def main(states_folder: str = "states_64", canonical_states: int = 64):
+def main(
+    states_folder: str = "states_16",
+    canonical_states: int = 64,
+    run_dir: str | None = None,
+    reward_systems: list[str] | None = None,
+    regressor_data_path: str = "data/regressor_training_data.json",
+    append_regressor_data: bool = False,
+    index_path: str = "faiss_index/policy.index",
+    metadata_path: str = "faiss_index/metadata.pkl",
+):
     """
     Main function to train successor models and prepare training data.
 
     Args:
-        states_folder: Name of the folder containing states (e.g., "states_16", "states_64")
+        states_folder: Name of the folder containing states (e.g., "states_16").
         canonical_states: Total number of canonical states to collect (default: 64)
+        run_dir: Path to a state_runs/<spec> folder; if provided, overrides states_folder.
+        reward_systems: Optional list of reward systems to include.
+        regressor_data_path: Output path for regressor training data.
+        append_regressor_data: If True, append to existing regressor data (when present).
+        index_path: Output path for Faiss index.
+        metadata_path: Output path for Faiss metadata.
     """
     from faiss_utils.setup_faiss_vdb import FaissVectorDB
 
-    vdb = FaissVectorDB(
-        index_path="faiss_index/policy.index", metadata_path="faiss_index/metadata.pkl"
-    )
-    regressor_training_data = {
-        "policy_embedding": [],
-        "reward": [],
-    }
+    vdb = FaissVectorDB(index_path=index_path, metadata_path=metadata_path)
+    regressor_training_data = {"policy_embedding": [], "reward": []}
+    if append_regressor_data and os.path.exists(regressor_data_path):
+        try:
+            with open(regressor_data_path, "r") as f:
+                existing = json.load(f)
+            regressor_training_data["policy_embedding"].extend(
+                existing.get("policy_embedding", [])
+            )
+            regressor_training_data["reward"].extend(existing.get("reward", []))
+        except Exception as e:
+            print(
+                f"Warning: failed to load existing regressor data from {regressor_data_path}: {e}"
+            )
     canonical_states_array = np.array(
         create_canonical_states(
-            states_folder=states_folder, canonical_states=canonical_states
+            states_folder=states_folder,
+            canonical_states=canonical_states,
+            run_dir=run_dir,
+            reward_systems=reward_systems,
         )
     )
-    processed_states = process_states(states_folder=states_folder)
+    processed_states = process_states(
+        states_folder=states_folder,
+        run_dir=run_dir,
+        reward_systems=reward_systems,
+    )
     for r in tqdm(
         processed_states.itertuples(),
         total=len(processed_states),
         desc="Training successor models",
     ):
         policy_target = r.policy_target
-        desc = (
-            "Explore and collect as many gold pieces as possible."
-            if policy_target == "gold"
-            else "Find the exit cell as quickly as possible."
+        desc_map = {
+            "path": "Find the shortest path to the exit.",
+            "gold": "Collect as much gold as possible before exiting.",
+            "lever": "Activate the lever before reaching the exit.",
+            "hazard": "Reach the exit while avoiding hazards and staying away from them.",
+            "hazard-lever": "Activate the lever and avoid hazards while reaching the exit.",
+            "path-gold": "Find the fastest exit and collect as much gold as possible.",
+            "path-gold-hazard": (
+                "Find the fastest exit, collect as much gold as possible, and avoid hazards."
+            ),
+            "path-gold-hazard-lever": (
+                "Find the fastest exit, collect as much gold as possible, avoid hazards, "
+                "and activate the lever."
+            ),
+        }
+        desc = desc_map.get(
+            policy_target, f"Composite objective: {policy_target.replace('-', ', ')}."
         )
         policy_name = r.policy_name
         reward = r.reward
+        energy_j = getattr(r, "energy_j", None)
+        time_s = getattr(r, "time_s", None)
         transitions = r.transitions
         policy_seed, policy_embedding = train_and_save_successor_model(
             policy_name, transitions, canonical_states_array
@@ -194,21 +241,31 @@ def main(states_folder: str = "states_64", canonical_states: int = 64):
         # Load Q-table from episode folder
         episode_id = r.episode_id
         seed_name = r.seed_name
-        episode_str = (
-            f"episode_{int(episode_id):06d}"  # Use 6 digits to match folder structure
-        )
-        q_table_path = os.path.join(
-            os.getcwd(),
-            states_folder,
-            policy_target,
-            seed_name,
-            "episodes",
-            episode_str,
-            "q_table.npy",
-        )
+        episode_id_int = int(episode_id)
+        if run_dir:
+            root_dir = run_dir
+        else:
+            root_dir = os.path.join(os.getcwd(), states_folder)
+
+        episodes_dir = os.path.join(root_dir, policy_target, seed_name, "episodes")
+        q_table_path = None
+        for width in (6, 5, 4):
+            episode_str = f"episode_{episode_id_int:0{width}d}"
+            candidate = os.path.join(episodes_dir, episode_str, "q_table.npy")
+            if os.path.exists(candidate):
+                q_table_path = candidate
+                break
+        if q_table_path is None and os.path.isdir(episodes_dir):
+            for name in os.listdir(episodes_dir):
+                if not name.startswith("episode_"):
+                    continue
+                suffix = name.split("_", 1)[1]
+                if suffix.isdigit() and int(suffix) == episode_id_int:
+                    q_table_path = os.path.join(episodes_dir, name, "q_table.npy")
+                    break
 
         q_table = None
-        if os.path.exists(q_table_path):
+        if q_table_path and os.path.exists(q_table_path):
             try:
                 q_table = np.load(q_table_path)
                 # Convert to list for JSON serialization in metadata
@@ -216,15 +273,25 @@ def main(states_folder: str = "states_64", canonical_states: int = 64):
             except Exception as e:
                 print(f"Warning: Could not load Q-table from {q_table_path}: {e}")
 
-        dag_path = os.path.join(
-            os.getcwd(),
-            states_folder,
-            policy_target,
-            seed_name,
-            "episodes",
-            episode_str,  # episode_str already uses 6 digits
-            "dag.pkl",
-        )
+        if run_dir:
+            dag_path = os.path.join(
+                run_dir,
+                policy_target,
+                seed_name,
+                "episodes",
+                episode_str,  # episode_str already uses 6 digits
+                "dag.pkl",
+            )
+        else:
+            dag_path = os.path.join(
+                os.getcwd(),
+                states_folder,
+                policy_target,
+                seed_name,
+                "episodes",
+                episode_str,  # episode_str already uses 6 digits
+                "dag.pkl",
+            )
 
         dag = None
         if os.path.exists(dag_path):
@@ -244,8 +311,8 @@ def main(states_folder: str = "states_64", canonical_states: int = 64):
             "policy_embedding": policy_embedding,
             "q_table": q_table,  # Q-table as list (or None if not found)
             "dag": dag,
-            # example values
-            "energy_consumption": round(np.random.uniform(0, 1), 3),
+            "energy_consumption": energy_j,
+            "training_time_s": time_s,
         }
         vdb.add_policy_from_kwargs(**faiss_entry)
 
@@ -257,18 +324,19 @@ def main(states_folder: str = "states_64", canonical_states: int = 64):
 
     # Save regressor training data to JSON
     # Convert numpy arrays to lists for JSON serialization
+    policy_embeddings = []
+    for embedding in regressor_training_data["policy_embedding"]:
+        if isinstance(embedding, list):
+            policy_embeddings.append(embedding)
+        else:
+            policy_embeddings.append(embedding.tolist())
     json_data = {
-        "policy_embedding": [
-            embedding.tolist()
-            for embedding in regressor_training_data["policy_embedding"]
-        ],
+        "policy_embedding": policy_embeddings,
         "reward": regressor_training_data["reward"],
     }
     # Ensure data directory exists
-    os.makedirs("data", exist_ok=True)
-    # Save to JSON file
-    json_path = "data/regressor_training_data.json"
-    with open(json_path, "w") as f:
+    os.makedirs(os.path.dirname(regressor_data_path) or ".", exist_ok=True)
+    with open(regressor_data_path, "w") as f:
         json.dump(json_data, f, indent=2)
 
 

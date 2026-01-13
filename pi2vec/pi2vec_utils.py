@@ -11,15 +11,17 @@ START_POSITION_VALUE = 5
 TARGET_POSITION_VALUE = 10
 BLOCK_POSITION_VALUE = -1
 GOLD_POSITION_VALUE = 1
+HAZARD_POSITION_VALUE = -2
+LEVER_POSITION_VALUE = 2
 AGENT_POSITION_VALUE = 7
 
 # Feature vector constants
-STATE_HEAD_LEN = 13  # First 13 scalars before the variable manhattan list
+STATE_HEAD_LEN = 21  # First scalars before the variable manhattan list
 GMAX_16 = 50  # Maximum number of golds to pad manhattan distances to
 GMAX_64 = 200  # Maximum number of golds to pad manhattan distances to
 
 
-def state_to_vector(state: np.ndarray) -> np.ndarray:
+def state_to_vector(state: np.ndarray, hazard_steps: float | None = None) -> np.ndarray:
     """
     Convert a GridWorld state (NxN grid) into a fixed-size feature vector.
 
@@ -31,7 +33,13 @@ def state_to_vector(state: np.ndarray) -> np.ndarray:
     5. exit_vec: (dx, dy) to target normalized by N
     6. exit_dist: distance to target normalized by sqrt(2)*N
     7. walls_nearby: [up, down, left, right] binary indicators (unnormalized)
-    8. manhattan_to_golds: Manhattan distances normalized by 2*N (sorted, padded/truncated to GMAX)
+    8. lever_vec: (dx, dy) to lever normalized by N (zero if no lever present)
+    9. lever_dist: distance to lever normalized by sqrt(2)*N (zero if no lever present)
+    10. lever_collected_flag: 1 if lever value absent in grid, else 0
+    11. hazard_count: hazards / N^2 (normalized density)
+    12. nearest_hazard_dist: min distance to a hazard normalized by sqrt(2)*N (zero if none)
+    13. hazard_steps: cumulative hazard visits so far (normalized by N^2)
+    14. manhattan_to_golds: Manhattan distances normalized by 2*N (sorted, padded/truncated to GMAX)
 
     Args:
         state: numpy array of shape (N, N) representing the GridWorld state (e.g., (16, 16) or (64, 64))
@@ -78,38 +86,70 @@ def state_to_vector(state: np.ndarray) -> np.ndarray:
 
     # Find all gold positions
     gold_positions = np.argwhere(state == GOLD_POSITION_VALUE)
+
     if len(gold_positions) == 0:
-        raise ValueError("No gold found in state (value 1)")
+        # Robust fallback: no gold in state; zero out gold-dependent features
+        num_golds_remaining = 0
+        nearest_dx = nearest_dy = d_near = 0.0
+        manhattan_distances = []
+    else:
+        # Number of golds remaining
+        num_golds_remaining = len(gold_positions)
 
-    # Number of golds remaining
-    num_golds_remaining = len(gold_positions)
+        # Convert gold positions from (row, col) to (x, y) coordinates
+        gold_coords = [(col, row) for row, col in gold_positions]
 
-    # Convert gold positions from (row, col) to (x, y) coordinates
-    gold_coords = [(col, row) for row, col in gold_positions]
+        # Compute distances to all gold positions
+        manhattan_distances = []
+        euclidean_distances = []
+        vectors_to_gold = []
 
-    # Compute distances to all gold positions
-    manhattan_distances = []
-    euclidean_distances = []
-    vectors_to_gold = []
+        for gold_x, gold_y in gold_coords:
+            dx = gold_x - agent_x
+            dy = gold_y - agent_y
 
-    for gold_x, gold_y in gold_coords:
-        dx = gold_x - agent_x
-        dy = gold_y - agent_y
+            vectors_to_gold.append((dx, dy))
 
-        vectors_to_gold.append((dx, dy))
+            # Manhattan distance: d_1 = |x - g_x| + |y - g_y|
+            d_manhattan = abs(dx) + abs(dy)
+            manhattan_distances.append(d_manhattan)
 
-        # Manhattan distance: d_1 = |x - g_x| + |y - g_y|
-        d_manhattan = abs(dx) + abs(dy)
-        manhattan_distances.append(d_manhattan)
+            # Euclidean distance
+            d_euclidean = np.sqrt(dx**2 + dy**2)
+            euclidean_distances.append(d_euclidean)
 
-        # Euclidean distance
-        d_euclidean = np.sqrt(dx**2 + dy**2)
-        euclidean_distances.append(d_euclidean)
+        # Find nearest gold
+        nearest_idx = np.argmin(euclidean_distances)
+        nearest_dx, nearest_dy = vectors_to_gold[nearest_idx]
+        d_near = euclidean_distances[nearest_idx]
 
-    # Find nearest gold
-    nearest_idx = np.argmin(euclidean_distances)
-    nearest_dx, nearest_dy = vectors_to_gold[nearest_idx]
-    d_near = euclidean_distances[nearest_idx]
+    # Hazards
+    hazard_positions = np.argwhere(state == HAZARD_POSITION_VALUE)
+    hazard_count = len(hazard_positions)
+    hazard_density = hazard_count / float(N * N)
+    if hazard_count == 0:
+        nearest_hazard_dist = 0.0
+    else:
+        h_euclidean = []
+        for hy, hx in hazard_positions:
+            dx = hx - agent_x
+            dy = hy - agent_y
+            h_euclidean.append(np.sqrt(dx**2 + dy**2))
+        nearest_hazard_dist = float(np.min(h_euclidean))
+
+    # Lever
+    lever_positions = np.argwhere(state == LEVER_POSITION_VALUE)
+    lever_present = len(lever_positions) > 0
+    if lever_present:
+        lever_y, lever_x = lever_positions[0]
+        lever_dx = lever_x - agent_x
+        lever_dy = lever_y - agent_y
+        lever_dist = np.sqrt(lever_dx**2 + lever_dy**2)
+    else:
+        lever_dx = lever_dy = lever_dist = 0.0
+
+    # Heuristic flag: if lever cell is absent, assume it has been collected
+    lever_collected_flag = 0 if lever_present else 1
 
     # Compute exit/target vector and distance
     exit_dx = exit_x - agent_x
@@ -148,6 +188,13 @@ def state_to_vector(state: np.ndarray) -> np.ndarray:
     exit_dx_tilde = exit_dx / N
     exit_dy_tilde = exit_dy / N
     exit_dist_tilde = exit_dist / (np.sqrt(2) * N)
+    lever_dx_tilde = lever_dx / N
+    lever_dy_tilde = lever_dy / N
+    lever_dist_tilde = lever_dist / (np.sqrt(2) * N)
+    nearest_hazard_dist_tilde = nearest_hazard_dist / (np.sqrt(2) * N)
+    hazard_steps_norm = 0.0
+    if hazard_steps is not None:
+        hazard_steps_norm = hazard_steps / float(N * N)
 
     # Normalize Manhattan distances: d_1_tilde = d_1 / (2*N)
     manhattan_distances_tilde = np.array(
@@ -162,7 +209,7 @@ def state_to_vector(state: np.ndarray) -> np.ndarray:
     if take > 0:
         d1_fixed[:take] = manhattan_distances_tilde[:take]
 
-    # Construct feature vector head (first 13 scalars)
+    # Construct feature vector head
     head = np.array(
         [
             # agent_xy
@@ -185,6 +232,16 @@ def state_to_vector(state: np.ndarray) -> np.ndarray:
             wall_down,
             wall_left,
             wall_right,
+            # lever vector/dist
+            lever_dx_tilde,
+            lever_dy_tilde,
+            lever_dist_tilde,
+            # lever collected flag (heuristic)
+            lever_collected_flag,
+            # hazard features
+            hazard_density,
+            nearest_hazard_dist_tilde,
+            hazard_steps_norm,
         ],
         dtype=np.float32,
     )
@@ -196,151 +253,153 @@ def state_to_vector(state: np.ndarray) -> np.ndarray:
 
 
 def get_episode_path(
-    base_dir, policy, seed, episode_id, states_folder: str = "states_64"
+    base_dir, policy, seed, episode_id, states_folder: str | None = "states_16"
 ):
-    # episode_id is an integer, need to pad to 6 digits (e.g., episode_047000)
-    episode_str = f"episode_{int(episode_id):06d}"
-    return os.path.join(
-        base_dir,
-        states_folder,
-        policy,
-        seed,
-        "episodes",
-        episode_str,
-        "episode_states.npy",
-    )
+    episode_id_int = int(episode_id)
+    if states_folder:
+        root_dir = os.path.join(base_dir, states_folder)
+    else:
+        root_dir = base_dir
+    episodes_dir = os.path.join(root_dir, policy, seed, "episodes")
+    # Try common zero-padding widths first.
+    for width in (6, 5, 4):
+        episode_str = f"episode_{episode_id_int:0{width}d}"
+        candidate = os.path.join(episodes_dir, episode_str, "episode_states.npy")
+        if os.path.exists(candidate):
+            return candidate
+    # Fallback: scan existing episode folders and match numeric suffix.
+    if os.path.isdir(episodes_dir):
+        for name in os.listdir(episodes_dir):
+            if not name.startswith("episode_"):
+                continue
+            suffix = name.split("_", 1)[1]
+            if suffix.isdigit() and int(suffix) == episode_id_int:
+                return os.path.join(episodes_dir, name, "episode_states.npy")
+    # Default to 6-digit layout if nothing matches.
+    episode_str = f"episode_{episode_id_int:06d}"
+    return os.path.join(episodes_dir, episode_str, "episode_states.npy")
 
 
 def create_canonical_states(
-    states_folder: str = "states_64", canonical_states: int = 64
+    states_folder: str = "states_16",
+    canonical_states: int = 64,
+    run_dir: str | None = None,
+    reward_systems: list[str] | None = None,
+    force_recreate: bool = False,
 ):
     """
-    Randomly select states (half from gold, half from path), convert them to feature vectors
-    using state_to_vector(), and save them as data/canonical_states_{states_folder}.npy.
-    Only creates the file if it doesn't already exist.
+    Randomly select states from available reward systems, convert them to feature
+    vectors using state_to_vector(), and save them as data/canonical_states_*.npy.
+    Only creates the file if it doesn't already exist (unless force_recreate=True).
 
     Args:
-        states_folder: Name of the folder containing states (e.g., "states_16", "states_64")
+        states_folder: Name of the folder containing states (e.g., "states_16").
         canonical_states: Total number of canonical states to collect (default: 64).
-                         Half will be from gold policy, half from path policy.
+        run_dir: Path to a state_runs/<spec> folder; if provided, overrides states_folder.
+        reward_systems: Optional list of reward systems to sample from.
+        force_recreate: If True, regenerate even if the file exists.
 
     Returns:
         numpy array of shape (canonical_states, STATE_HEAD_LEN + GMAX) containing the canonical
         state feature vectors, or None if file already exists
     """
-    base_dir = os.getcwd()
-    # Use folder-specific filename to avoid conflicts between different grid sizes
-    output_path = os.path.join(
-        base_dir, "data", f"canonical_states_{states_folder}.npy"
-    )
+    if run_dir:
+        base_dir = run_dir
+        run_name = os.path.basename(os.path.normpath(run_dir))
+        output_path = os.path.join(
+            os.getcwd(), "data", f"canonical_states_{run_name}.npy"
+        )
+    else:
+        base_dir = os.getcwd()
+        output_path = os.path.join(
+            base_dir, "data", f"canonical_states_{states_folder}.npy"
+        )
 
     # Check if file already exists
-    if os.path.exists(output_path):
-        print(
-            f"canonical_states_{states_folder}.npy already exists at {output_path}. Skipping creation."
-        )
-        return np.load(output_path)
+    if os.path.exists(output_path) and not force_recreate:
+        cached = np.load(output_path)
+        if cached.shape[0] != canonical_states:
+            print(
+                f"Warning: requested {canonical_states} canonical states, using existing "
+                f"{cached.shape[0]} from {output_path}."
+            )
+        else:
+            print(
+                f"{os.path.basename(output_path)} already exists at {output_path}. Skipping creation."
+            )
+        return cached
+    if os.path.exists(output_path) and force_recreate:
+        print(f"Recreating canonical states at {output_path}.")
+
+    if reward_systems is None:
+        if run_dir:
+            reward_systems = [
+                d
+                for d in os.listdir(run_dir)
+                if os.path.isdir(os.path.join(run_dir, d))
+            ]
+        else:
+            reward_systems = ["gold", "path"]
 
     # Calculate number of states per policy
-    states_per_policy = canonical_states // 2
+    per_policy = canonical_states // len(reward_systems)
+    remainder = canonical_states % len(reward_systems)
 
-    # Find all episode_states.npy files for each policy
-    gold_pattern = os.path.join(
-        base_dir, states_folder, "gold", "**", "episode_states.npy"
-    )
-    path_pattern = os.path.join(
-        base_dir, states_folder, "path", "**", "episode_states.npy"
-    )
+    all_states = []
 
-    gold_files = glob.glob(gold_pattern, recursive=True)
-    path_files = glob.glob(path_pattern, recursive=True)
+    for idx, policy in enumerate(reward_systems):
+        target_count = per_policy + (1 if idx < remainder else 0)
+        policy_states = []
+        if run_dir:
+            pattern = os.path.join(run_dir, policy, "**", "episode_states.npy")
+        else:
+            pattern = os.path.join(
+                base_dir, states_folder, policy, "**", "episode_states.npy"
+            )
+        policy_files = glob.glob(pattern, recursive=True)
+        random.shuffle(policy_files)
 
-    print(
-        f"Found {len(gold_files)} gold episode files and {len(path_files)} path episode files"
-    )
-
-    # Randomly select episodes and then randomly select states from those episodes
-    gold_states = []
-    path_states = []
-
-    # Randomly shuffle episode files
-    random.shuffle(gold_files)
-    random.shuffle(path_files)
-
-    # Collect states from gold episodes
-    for npy_path in gold_files:
-        if len(gold_states) >= states_per_policy:
-            break
-        try:
-            states = np.load(npy_path)
-            if states.ndim == 3:
-                # Randomly select one state from this episode
-                if len(states) > 0:
-                    random_idx = random.randint(0, len(states) - 1)
-                    state = states[random_idx]
-                    try:
-                        feature_vec = state_to_vector(state)
-                        gold_states.append(feature_vec)
-                    except Exception as e:
-                        print(f"Error converting state to vector from {npy_path}: {e}")
-                        continue
-            elif states.ndim == 2:
-                # Single state
-                try:
-                    feature_vec = state_to_vector(states)
-                    gold_states.append(feature_vec)
-                except Exception as e:
-                    print(f"Error converting state to vector from {npy_path}: {e}")
-                    continue
-            else:
+        for npy_path in policy_files:
+            if len(policy_states) >= target_count:
+                break
+            try:
+                states = np.load(npy_path)
+                hazard_path = npy_path.replace(
+                    "episode_states.npy", "episode_hazard_counts.npy"
+                )
+                hazard_counts = None
+                if os.path.exists(hazard_path):
+                    hazard_counts = np.load(hazard_path)
+                if states.ndim == 3:
+                    if len(states) > 0:
+                        random_idx = random.randint(0, len(states) - 1)
+                        state = states[random_idx]
+                        hazard_steps = (
+                            hazard_counts[random_idx]
+                            if hazard_counts is not None
+                            else None
+                        )
+                        feature_vec = state_to_vector(
+                            state, hazard_steps=hazard_steps
+                        )
+                        policy_states.append(feature_vec)
+                elif states.ndim == 2:
+                    hazard_steps = None
+                    if hazard_counts is not None and len(hazard_counts) > 0:
+                        hazard_steps = hazard_counts[0]
+                    feature_vec = state_to_vector(states, hazard_steps=hazard_steps)
+                    policy_states.append(feature_vec)
+            except Exception as e:
+                print(f"Error converting state to vector from {npy_path}: {e}")
                 continue
-        except Exception as e:
-            print(f"Error loading {npy_path}: {e}")
-            continue
 
-    # Collect states from path episodes
-    for npy_path in path_files:
-        if len(path_states) >= states_per_policy:
-            break
-        try:
-            states = np.load(npy_path)
-            if states.ndim == 3:
-                # Randomly select one state from this episode
-                if len(states) > 0:
-                    random_idx = random.randint(0, len(states) - 1)
-                    state = states[random_idx]
-                    try:
-                        feature_vec = state_to_vector(state)
-                        path_states.append(feature_vec)
-                    except Exception as e:
-                        print(f"Error converting state to vector from {npy_path}: {e}")
-                        continue
-            elif states.ndim == 2:
-                # Single state
-                try:
-                    feature_vec = state_to_vector(states)
-                    path_states.append(feature_vec)
-                except Exception as e:
-                    print(f"Error converting state to vector from {npy_path}: {e}")
-                    continue
-            else:
-                continue
-        except Exception as e:
-            print(f"Error loading {npy_path}: {e}")
-            continue
+        if len(policy_states) < target_count:
+            print(
+                f"Warning: Only collected {len(policy_states)} states for {policy} (need {target_count})"
+            )
+        all_states.extend(policy_states)
 
-    # Check if we have enough states
-    if len(gold_states) < states_per_policy:
-        print(
-            f"Warning: Only collected {len(gold_states)} gold states (need {states_per_policy})"
-        )
-    if len(path_states) < states_per_policy:
-        print(
-            f"Warning: Only collected {len(path_states)} path states (need {states_per_policy})"
-        )
-
-    # Combine into single array
-    canonical_states = np.array(gold_states + path_states, dtype=np.float32)
+    canonical_states = np.array(all_states, dtype=np.float32)
 
     # Ensure output directory exists
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -352,61 +411,104 @@ def create_canonical_states(
     return canonical_states
 
 
-def process_states(states_folder: str = "states_64"):
+def process_states(
+    states_folder: str = "states_16",
+    run_dir: str | None = None,
+    reward_systems: list[str] | None = None,
+    percentages: list[float] | None = None,
+):
     """
-    Process states from gold and path policies and save to data/processed_states.csv.
+    Process states from all available reward systems and save to data/processed_states*.csv.
     Transitions are stored in memory as tuples of numpy arrays (np.array, np.array).
     If the file already exists, returns it as a pandas DataFrame without reprocessing.
 
     Args:
-        states_folder: Name of the folder containing states (e.g., "states_16", "states_64")
+        states_folder: Name of the folder containing states (e.g., "states_16").
+        run_dir: Path to a state_runs/<spec> folder; if provided, overrides states_folder.
+        reward_systems: Optional list of reward systems to include.
+        percentages: Optional list of snapshot percentages to sample.
 
     Returns:
         pandas DataFrame with columns: policy_target, policy_name, reward, transitions
         where transitions is a list of tuples (np.array, np.array)
     """
     base_dir = os.getcwd()
-    output_path = os.path.join(base_dir, "data", "processed_states.csv")
-    transitions_path = os.path.join(
-        base_dir, "data", "processed_states_transitions.pkl"
-    )
+    if run_dir:
+        run_name = os.path.basename(os.path.normpath(run_dir))
+        output_path = os.path.join(base_dir, "data", f"processed_states_{run_name}.csv")
+        transitions_path = os.path.join(
+            base_dir, "data", f"processed_states_transitions_{run_name}.pkl"
+        )
+    else:
+        output_path = os.path.join(base_dir, "data", "processed_states.csv")
+        transitions_path = os.path.join(
+            base_dir, "data", "processed_states_transitions.pkl"
+        )
 
     # Check if file already exists
     if os.path.exists(output_path) and os.path.exists(transitions_path):
         print(
             f"processed_states.csv already exists at {output_path}. Loading and returning."
         )
-        df = pd.read_csv(output_path)
-        # Load transitions from pickle file
-        with open(transitions_path, "rb") as f:
-            transitions_list = pickle.load(f)
-        df["transitions"] = transitions_list
-        return df
+        try:
+            if os.path.getsize(output_path) == 0:
+                raise pd.errors.EmptyDataError("empty processed_states.csv")
+            df = pd.read_csv(output_path)
+            if df.empty or len(df.columns) == 0:
+                raise pd.errors.EmptyDataError("empty processed_states.csv")
+            # Load transitions from pickle file
+            with open(transitions_path, "rb") as f:
+                transitions_list = pickle.load(f)
+            df["transitions"] = transitions_list
+            return df
+        except pd.errors.EmptyDataError:
+            print(
+                f"Warning: {output_path} is empty. Regenerating processed states."
+            )
+        except Exception as e:
+            print(
+                f"Warning: failed to load processed states from {output_path}: {e}. Regenerating."
+            )
+        # Cleanup before regenerating
+        try:
+            if os.path.exists(output_path):
+                os.remove(output_path)
+            if os.path.exists(transitions_path):
+                os.remove(transitions_path)
+        except OSError as e:
+            print(f"Warning: failed to remove stale processed states files: {e}")
 
-    policies = ["gold", "path"]
-    percentages = [0.2, 0.6, 1.0]
+    if reward_systems is None:
+        if run_dir:
+            reward_systems = [
+                d
+                for d in os.listdir(run_dir)
+                if os.path.isdir(os.path.join(run_dir, d))
+            ]
+        else:
+            reward_systems = ["gold", "path"]
+    if percentages is None:
+        percentages = [0.2, 0.6, 0.8]
 
     results = []
 
     # First, find seeds that exist in BOTH policies
-    gold_seed_pattern = os.path.join(base_dir, states_folder, "gold", "seed_*")
-    path_seed_pattern = os.path.join(base_dir, states_folder, "path", "seed_*")
+    seed_sets = []
+    for policy in reward_systems:
+        if run_dir:
+            seed_pattern = os.path.join(run_dir, policy, "seed_*")
+        else:
+            seed_pattern = os.path.join(base_dir, states_folder, policy, "seed_*")
+        seed_dirs = glob.glob(seed_pattern)
+        seed_sets.append({os.path.basename(d) for d in seed_dirs})
 
-    gold_seed_dirs = glob.glob(gold_seed_pattern)
-    path_seed_dirs = glob.glob(path_seed_pattern)
-
-    # Extract seed names (basename) from directories
-    gold_seed_names = {os.path.basename(d) for d in gold_seed_dirs}
-    path_seed_names = {os.path.basename(d) for d in path_seed_dirs}
-
-    # Find common seeds (seeds that exist in both policies)
-    common_seed_names = gold_seed_names.intersection(path_seed_names)
+    if seed_sets:
+        common_seed_names = set.intersection(*seed_sets)
+    else:
+        common_seed_names = set()
     common_seed_names = sorted(list(common_seed_names))
 
-    print(
-        f"Found {len(gold_seed_names)} gold seeds and {len(path_seed_names)} path seeds"
-    )
-    print(f"Found {len(common_seed_names)} common seeds")
+    print(f"Found {len(common_seed_names)} common seeds across reward systems")
 
     # Select only 10% of common seeds
     # num_seeds_to_use = max(1, int(len(common_seed_names) * 0.1))
@@ -416,12 +518,21 @@ def process_states(states_folder: str = "states_64"):
     print(f"Using {len(selected_seed_names)} common seeds")
     print(f"Selected seeds: {selected_seed_names}")
 
+    spec_prefix = None
+    if run_dir:
+        run_name = os.path.basename(os.path.normpath(run_dir))
+        if run_name:
+            spec_prefix = run_name.split("_")[0]
+
     # Now process both policies using the same selected seeds
-    for policy in policies:
+    for policy in reward_systems:
         print(f"\nProcessing policy: {policy}")
 
         for seed_name in selected_seed_names:
-            seed_dir = os.path.join(base_dir, states_folder, policy, seed_name)
+            if run_dir:
+                seed_dir = os.path.join(run_dir, policy, seed_name)
+            else:
+                seed_dir = os.path.join(base_dir, states_folder, policy, seed_name)
             rewards_file = os.path.join(seed_dir, "episode_rewards.csv")
 
             if not os.path.exists(rewards_file):
@@ -450,9 +561,17 @@ def process_states(states_folder: str = "states_64"):
                 row = df_rewards.iloc[idx]
                 episode_id = row["episode"]
                 reward = row["reward"]
+                energy_j = (
+                    row["energy_j"] if "energy_j" in df_rewards.columns else None
+                )
+                time_s = row["time"] if "time" in df_rewards.columns else None
 
                 npy_path = get_episode_path(
-                    base_dir, policy, seed_name, episode_id, states_folder
+                    run_dir if run_dir else base_dir,
+                    policy,
+                    seed_name,
+                    episode_id,
+                    None if run_dir else states_folder,
                 )
 
                 if not os.path.exists(npy_path):
@@ -461,15 +580,24 @@ def process_states(states_folder: str = "states_64"):
 
                 try:
                     states = np.load(npy_path)
+                    hazard_path = npy_path.replace(
+                        "episode_states.npy", "episode_hazard_counts.npy"
+                    )
+                    hazard_counts = None
+                    if os.path.exists(hazard_path):
+                        hazard_counts = np.load(hazard_path)
                 except Exception as e:
                     print(f"Error loading {npy_path}: {e}")
                     continue
 
                 # Process states
                 state_vectors = []
-                for state in states:
+                for idx, state in enumerate(states):
                     try:
-                        vec = state_to_vector(state)
+                        hazard_steps = (
+                            hazard_counts[idx] if hazard_counts is not None else None
+                        )
+                        vec = state_to_vector(state, hazard_steps=hazard_steps)
                         state_vectors.append(vec)
                     except Exception as e:
                         print(f"Error processing state in {npy_path}: {e}")
@@ -483,11 +611,11 @@ def process_states(states_folder: str = "states_64"):
                     pairs.append((state_vectors[i], state_vectors[i + 1]))
 
                 # Format policy name
-                # policy_name: {target}_{seed_number}_{20 or 40 or 60 or 80}
-                # User asked for 20, 40, 60, 100
-                policy_name = (
+                # policy_name: {spec_} {target}_{seed_number}_{percent}
+                base_name = (
                     f"{policy}_{seed_name.replace('seed_', '')}_{int(p * 100)}"
                 )
+                policy_name = f"{spec_prefix}_{base_name}" if spec_prefix else base_name
 
                 results.append(
                     {
@@ -497,6 +625,8 @@ def process_states(states_folder: str = "states_64"):
                         "transitions": pairs,
                         "episode_id": episode_id,
                         "seed_name": seed_name,
+                        "energy_j": energy_j,
+                        "time_s": time_s,
                     }
                 )
 
@@ -512,6 +642,8 @@ def process_states(states_folder: str = "states_64"):
                 "reward": result["reward"],
                 "episode_id": result["episode_id"],
                 "seed_name": result["seed_name"],
+                "energy_j": result.get("energy_j"),
+                "time_s": result.get("time_s"),
             }
             for result in results
         ]

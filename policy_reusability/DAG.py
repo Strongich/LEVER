@@ -17,6 +17,7 @@ class DAG:
         gridworld.reset()
         self.gridworld = gridworld
         self.graph = nx.DiGraph()
+        self.edge_counts = {}
         states = range(gridworld.state_count)
         self.graph.add_nodes_from(states)
         self.N = N
@@ -31,18 +32,29 @@ class DAG:
         }
         self._action_cache = {}
         # Static position sets for fast reward lookups
-        self._gold_positions = (
-            set(tuple(pos) for pos in getattr(gridworld, "gold_positions", []) or [])
+        self._gold_positions = set(
+            tuple(pos) for pos in getattr(gridworld, "gold_positions", []) or []
         )
-        self._block_positions = (
-            set(tuple(pos) for pos in getattr(gridworld, "block_positions", []) or [])
+        self._block_positions = set(
+            tuple(pos) for pos in getattr(gridworld, "block_positions", []) or []
+        )
+        self._hazard_positions = set(
+            tuple(pos) for pos in getattr(gridworld, "hazard_positions", []) or []
         )
         self._target_position = tuple(getattr(gridworld, "target_position", ()))
+        lever_pos = getattr(gridworld, "lever_position", None)
+        self._lever_position = tuple(lever_pos) if lever_pos is not None else None
         self._block_reward = getattr(gridworld, "block_reward", 0)
         self._target_reward = getattr(gridworld, "target_reward", 0)
+        self._total_gold_count = len(self._gold_positions)
+        self._legacy_gold_exit_penalty = getattr(
+            gridworld, "legacy_gold_exit_penalty", False
+        )
 
     def add_edge(self, a, b):
         self.graph.add_edge(a, b)
+        key = (a, b)
+        self.edge_counts[key] = self.edge_counts.get(key, 0) + 1
 
     # This has been implemented for the gridworld environment with two actions: right and down
 
@@ -60,15 +72,15 @@ class DAG:
         # right
         elif state_2[0] == state_1[0] and state_2[1] == state_1[1] + 1:
             action = 0
-        # down*2
-        elif state_2[0] == state_1[0] + 2 and state_2[1] == state_1[1]:
-            action = 3
+        # down
+        elif state_2[0] == state_1[0] + 1 and state_2[1] == state_1[1]:
+            action = 1
         # right*2
         elif state_2[0] == state_1[0] and state_2[1] == state_1[1] + 2:
             action = 2
-        # diagonal
-        elif state_2[0] == state_1[0] + 1 and state_2[1] == state_1[1] + 1:
-            action = 4
+        # down*2
+        elif state_2[0] == state_1[0] + 2 and state_2[1] == state_1[1]:
+            action = 3
         else:
             action = None
             print("Action could not be obtained")
@@ -124,33 +136,44 @@ class DAG:
     #     return dag
 
     @staticmethod
-    def union_of_graphs(gridworld, dags, N):
+    def union_of_graphs(gridworld, dags, N, reward_system: str | None = None):
         union_graph = nx.DiGraph()
+        union_counts = {}
 
         for dag in dags:
             union_graph.add_nodes_from(dag.graph.nodes)
             union_graph.add_edges_from(dag.graph.edges)
+            counts = getattr(dag, "edge_counts", {}) or {}
+            for edge, count in counts.items():
+                union_counts[edge] = union_counts.get(edge, 0) + count
 
         new_grid_world = copy.copy(gridworld)
-        new_grid_world.reward_system = "combined"
+        new_grid_world.reward_system = reward_system or "combined"
         new_grid_world.reset()
         dag = DAG(
             new_grid_world, N
         )  # Make sure you have self.N defined in the class or pass it as a parameter.
         dag.graph = union_graph
+        dag.edge_counts = union_counts
 
         return dag
 
-    def union(self, other):
+    def union(self, other, reward_system: str | None = None):
         graph = nx.DiGraph()
         graph.add_nodes_from(self.graph.nodes)
         graph.add_edges_from(self.graph.edges)
         graph.add_edges_from(other.graph.edges)
+        union_counts = {}
+        for source in (self, other):
+            counts = getattr(source, "edge_counts", {}) or {}
+            for edge, count in counts.items():
+                union_counts[edge] = union_counts.get(edge, 0) + count
         new_grid_world = copy.copy(self.gridworld)
-        new_grid_world.reward_system = "combined"
+        new_grid_world.reward_system = reward_system or "combined"
         new_grid_world.reset()
         dag = DAG(new_grid_world, self.N)
         dag.graph = graph
+        dag.edge_counts = union_counts
         return dag
 
     def min_max_iter(self):
@@ -159,6 +182,22 @@ class DAG:
             graph_views=graph_views
         )
 
+    def min_max_iter_from_counts(self):
+        max_iterations = {node: [0] * self.action_size for node in self.graph.nodes}
+        min_iterations = {node: [0] * self.action_size for node in self.graph.nodes}
+
+        for edge in self.graph.edges:
+            action = self.obtain_action(edge[0], edge[1])
+            if action is None:
+                continue
+            count = self.edge_counts.get(edge, 0)
+            if count <= 0:
+                continue
+            if count > max_iterations[edge[0]][action]:
+                max_iterations[edge[0]][action] = count
+            if min_iterations[edge[0]][action] == 0:
+                min_iterations[edge[0]][action] = 1
+        return max_iterations, min_iterations
     def _graph_views(self):
         topo_order = list(nx.topological_sort(self.graph))
         topo_position = {node: idx for idx, node in enumerate(topo_order)}
@@ -271,9 +310,7 @@ class DAG:
                     min_iterations[node][action] = 1
         return min_iterations
 
-    def backtrack(
-        self, min_iterations, max_iterations, learning_rate, discount_factor
-    ):
+    def backtrack(self, min_iterations, max_iterations, learning_rate, discount_factor):
         predecessors, _, topo_position = self._graph_views()
         visited = set()
         queue = deque([self.end_node])
@@ -365,12 +402,146 @@ class DAG:
         if reward_system == "gold":
             return self._reward_gold_static(next_state)
         if reward_system == "combined":
-            return self._reward_gold_static(next_state) + self._reward_path_static(
-                current_state, next_state
-            )
+            components = {"path", "gold"}
+        else:
+            components = {token for token in reward_system.split("-") if token}
 
-        # Fallback to original (may mutate env) for unsupported reward systems
-        return self._calculate_reward_from_indices(state_index, next_state_index)
+        use_path = "path" in components
+        use_gold = "gold" in components
+        use_hazard = "hazard" in components
+        use_lever = "lever" in components
+
+        if tuple(next_state) in self._block_positions:
+            return self._block_reward
+        if tuple(next_state) in self._hazard_positions:
+            return -100
+
+        reward_total = 0.0
+        # Lever reward (approximate: only immediate activation)
+        if use_lever and self._lever_position is not None:
+            if tuple(next_state) == self._lever_position:
+                reward_total += 20
+
+        # Gold reward (approximate: immediate for cell)
+        if use_gold and tuple(next_state) in self._gold_positions:
+            reward_total += 5
+
+        # Hazard proximity penalty (4-neighborhood)
+        if use_hazard and self._hazard_positions:
+            x, y = next_state
+            hazard_neighbors = 0
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nx, ny = x + dx, y + dy
+                if (nx, ny) in self._hazard_positions:
+                    hazard_neighbors += 1
+            reward_total -= 2.0 * hazard_neighbors
+
+        # Exit reward (approximate: lever/gold state not tracked)
+        if tuple(next_state) == self._target_position:
+            if use_path:
+                reward_total += 100
+            if use_hazard:
+                reward_total += 100
+            if use_gold:
+                if len(self._gold_positions) == 0:
+                    reward_total += 100
+                else:
+                    if self._legacy_gold_exit_penalty:
+                        reward_total -= 20
+                    else:
+                        reward_total -= 10
+            if use_lever:
+                reward_total += 20 if self._lever_position is not None else 80
+
+        # Step costs (sum of active objectives)
+        if use_path:
+            reward_total -= 1.0
+        if use_gold:
+            reward_total -= 0.01
+        if use_hazard:
+            reward_total -= 0.1
+        if use_lever:
+            reward_total -= 0.1
+
+        return reward_total
+
+    def _edge_reward_stateful(
+        self,
+        state_index,
+        next_state_index,
+        remaining_gold: int,
+        lever_collected: bool,
+    ):
+        reward_system = getattr(self.gridworld, "reward_system", "path")
+        if reward_system == "combined":
+            components = {"path", "gold"}
+        else:
+            components = {token for token in reward_system.split("-") if token}
+
+        use_path = "path" in components
+        use_gold = "gold" in components
+        use_hazard = "hazard" in components
+        use_lever = "lever" in components
+
+        next_state = self._state_cache[next_state_index]
+        next_state_t = tuple(next_state)
+
+        if next_state_t in self._block_positions:
+            return self._block_reward, remaining_gold, lever_collected, False
+        if next_state_t in self._hazard_positions:
+            return -100, remaining_gold, lever_collected, True
+
+        reward_total = 0.0
+        new_remaining = remaining_gold
+        new_lever = lever_collected
+
+        if use_lever and self._lever_position is not None:
+            if next_state_t == self._lever_position and not lever_collected:
+                reward_total += 20
+                new_lever = True
+
+        if use_gold and next_state_t in self._gold_positions and remaining_gold > 0:
+            reward_total += 5
+            new_remaining = remaining_gold - 1
+
+        if use_hazard and self._hazard_positions:
+            x, y = next_state
+            hazard_neighbors = 0
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nx, ny = x + dx, y + dy
+                if (nx, ny) in self._hazard_positions:
+                    hazard_neighbors += 1
+            reward_total -= 2.0 * hazard_neighbors
+
+        terminal = False
+        if next_state_t == self._target_position:
+            terminal = True
+            if use_path:
+                reward_total += 100
+            if use_hazard:
+                reward_total += 100
+            if use_gold:
+                if new_remaining == 0:
+                    reward_total += 100
+                else:
+                    if self._legacy_gold_exit_penalty:
+                        reward_total -= 20
+                    else:
+                        total_gold = max(1, self._total_gold_count)
+                        reward_total -= 10 * (new_remaining / total_gold)
+            if use_lever:
+                reward_total += 80 if new_lever else 20
+
+        if use_path:
+            reward_total -= 1.0
+        if use_gold:
+            reward_total -= 0.01
+        if use_hazard:
+            reward_total -= 0.1
+        if use_lever:
+            reward_total -= 0.1
+
+        return reward_total, new_remaining, new_lever, terminal
 
     def compute_pruning_percentage(self, edge_count_before, edge_count_after):
         reduced_edge_count = edge_count_before - edge_count_after
@@ -412,10 +583,7 @@ class DAG:
                         if upper_bound_2 <= lower_bound:
                             remove.add((node, next_node_2))
                         else:
-                            if (
-                                next_node_2 not in queue
-                                and next_node_2 not in visited
-                            ):
+                            if next_node_2 not in queue and next_node_2 not in visited:
                                 queue.append(next_node_2)
 
                 if remove:
@@ -463,3 +631,60 @@ class DAG:
             path.append(cur)
         path.reverse()
         return path, dist[self.end_node]
+
+    def best_path_dp_stateful(self):
+        """
+        Compute best path with gold count + lever flag state.
+        """
+        topological_order = list(nx.topological_sort(self.graph))
+        total_gold = self._total_gold_count
+        lever_start = False if self._lever_position is not None else True
+
+        dist = {node: {} for node in self.graph.nodes}
+        parent = {}
+
+        start_state = (total_gold, lever_start)
+        dist[self.start_node][start_state] = 0.0
+
+        best_end = (float("-inf"), None)
+
+        for node in topological_order:
+            if not dist[node]:
+                continue
+            for (remaining_gold, lever_collected), cur_val in list(dist[node].items()):
+                for succ in self.graph.successors(node):
+                    reward, new_remaining, new_lever, terminal = (
+                        self._edge_reward_stateful(
+                            node, succ, remaining_gold, lever_collected
+                        )
+                    )
+                    candidate = cur_val + reward
+                    if terminal or succ == self.end_node:
+                        if candidate > best_end[0]:
+                            end_state = (new_remaining, new_lever)
+                            best_end = (candidate, end_state)
+                            parent[(succ, end_state)] = (node, (remaining_gold, lever_collected))
+                        continue
+
+                    new_state = (new_remaining, new_lever)
+                    prev = dist[succ].get(new_state, float("-inf"))
+                    if candidate > prev:
+                        dist[succ][new_state] = candidate
+                        parent[(succ, new_state)] = (node, (remaining_gold, lever_collected))
+
+        if best_end[1] is None:
+            return None, float("-inf")
+
+        # Reconstruct path
+        path = [self.end_node]
+        cur_node = self.end_node
+        cur_state = best_end[1]
+        while cur_node != self.start_node:
+            key = (cur_node, cur_state)
+            if key not in parent:
+                break
+            prev_node, prev_state = parent[key]
+            path.append(prev_node)
+            cur_node, cur_state = prev_node, prev_state
+        path.reverse()
+        return path, best_end[0]

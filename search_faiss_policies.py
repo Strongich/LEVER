@@ -15,9 +15,14 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from pydantic import BaseModel
 
+from config import (
+    GRIDWORLD_AVAILABLE_ACTIONS,
+    QUERY_DECOMPOSITION_PROMPT,
+    TRIVIAL_POLICIES,
+)
 from faiss_utils.setup_faiss_vdb import FaissVectorDB
 from pi2vec.train_regressor import load_model
-from policy_reusability.my_work.init_gridworld import init_gridworld_rand
+from policy_reusability.data_generation.gridworld_factory import init_gridworld_rand
 
 # Load environment variables
 load_dotenv()
@@ -36,6 +41,7 @@ class PolicyRetriever:
         self,
         index_path="faiss_index/policy.index",
         metadata_path="faiss_index/metadata.pkl",
+        regressor_model_path="models/reward_regressor.pkl",
         application_name="Grid World",
         available_actions=None,
     ):
@@ -57,13 +63,7 @@ class PolicyRetriever:
 
         # Store environment configuration
         self.application_name = application_name
-        self.available_actions = available_actions or [
-            "right",
-            "down",
-            "twice right",
-            "twice down",
-            "diagonal right down",
-        ]
+        self.available_actions = available_actions or GRIDWORLD_AVAILABLE_ACTIONS
 
         # Initialize OpenAI client
         api_key = os.getenv("OPENAI_API_KEY")
@@ -77,7 +77,7 @@ class PolicyRetriever:
         # Load regressor model for reward prediction
         print("Loading regressor model...")
         try:
-            self.regressor_model = load_model("models/reward_regressor.pkl")
+            self.regressor_model = load_model(regressor_model_path)
             print("✓ Regressor model loaded")
         except FileNotFoundError as e:
             print(f"⚠️  Warning: {e}")
@@ -85,7 +85,12 @@ class PolicyRetriever:
             self.regressor_model = None
         print()
 
-    def decompose_query(self, query: str) -> list[str]:
+    def decompose_query(
+        self,
+        query: str,
+        policy_list: list[str] | None = None,
+        expected_count: int | None = None,
+    ) -> list[str]:
         """
         Decompose a complex query into multiple sub-queries using LLM.
 
@@ -95,6 +100,8 @@ class PolicyRetriever:
 
         Args:
             query: The original user query to decompose
+            policy_list: Optional list of allowed policy strings to pick from
+            expected_count: Optional expected number of sub-queries
 
         Returns:
             list[str]: List of decomposed sub-queries
@@ -109,33 +116,19 @@ class PolicyRetriever:
 
         # Format available actions for the prompt
         actions_str = ", ".join(self.available_actions)
-
-        system_prompt = f"""You are a query decomposition assistant for Reinforcement Learning application.
-
-Application Context:
-- Environment: {self.application_name}
-- Available Actions: {actions_str}
-
-Your task is to decompose the user's query about a new and novel task into TRIVIAL tasks, where each sub-query describes only ONE single objective.
-
-Important Guidelines:
-- Break down complex tasks into the simplest possible single-objective components
-- Each sub-query must represent ONE atomic objective only
-- Avoid combining multiple objectives in a single sub-query
-- Consider the RL environment context and available actions
-- Each sub-query should be actionable for retrieving policies with a single clear goal
-
-For example:
-- If the query is "Navigate to target while collecting items", you must decompose it into:
-  ["navigate to a target location", "collect items"]
-  
-- If the query is "Find shortest path quickly and efficiently", you might decompose it into:
-  ["find shortest path to target", "minimize number of steps"]
-  
-- If the query is already a single objective --- return it as it is without any changes.
-
-IMPORTANT: Do not return any other text than the list of sub-queries.
-""".strip()
+        policy_list = policy_list or TRIVIAL_POLICIES
+        policy_items = "\n".join(f"- {t}" for t in policy_list)
+        expected_count_str = (
+            str(expected_count)
+            if expected_count is not None
+            else "the appropriate number of"
+        )
+        system_prompt = QUERY_DECOMPOSITION_PROMPT.format(
+            application_name=self.application_name,
+            actions=actions_str,
+            policy_list=policy_items,
+            expected_count=expected_count_str,
+        )
 
         try:
             response = self.openai_client.beta.chat.completions.parse(
@@ -742,10 +735,7 @@ def main():
 
     # Initialize retriever
     try:
-        retriever = PolicyRetriever(
-            application_name="Grid World",
-            available_actions=["move up", "move down", "move left", "move right"],
-        )
+        retriever = PolicyRetriever(application_name="Grid World")
     except Exception as e:
         print(f"Error loading Faiss database: {e}")
         print(

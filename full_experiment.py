@@ -2,16 +2,19 @@
 Full experiment runner for targeted vs exhaustive policy composition.
 
 Outputs a CSV with:
-seed, scratch_reward, targeted_reward, exhaustive_reward, decomp_time, targeted_time, exhaustive_time
+setup, spec, seed, query, scratch_reward, scratch_time_s, targeted_reward, exhaustive_reward, hybrid_reward,
+decomp_time, targeted_time, exhaustive_time, hybrid_time
 
 Definitions:
-- scratch_reward: greedy eval of the from-scratch combined policy (states_f/combined/seed_xxxx/q_table_final.npy)
+- scratch_reward: greedy eval of the from-scratch policy for each setup (e.g., path-gold)
 - targeted_reward: compose the top-2 retrieved policies (current search pipeline) using a single query
   decomposition shared across approaches; targeted_time = search/rank/compose (no greedy eval, no decomposition).
 - exhaustive_reward: exhaustively compose all candidate pairs, predict reward via regressor on a learned
   embedding (pi2vec successor features over greedy transitions of the combined Q-table), pick best predicted,
   then greedy eval for the reported reward. exhaustive_time = search + all pairwise successor
   training/prediction (no greedy eval, no decomposition).
+- hybrid_reward: for each sub-query, take top-k by regressor score, compose all cross-product combinations,
+  rank with the regressor, pick best predicted; hybrid_time = search + top-k combinations + successor/regressor.
 - decomp_time: time taken for query decomposition (shared across targeted and exhaustive approaches).
 
 Notes:
@@ -21,16 +24,30 @@ Notes:
 """
 
 import argparse
+import glob
+import itertools
 import os
+import re
+import sys
 import time
 
 import numpy as np
 import pandas as pd
 
+from config import (
+    DOUBLE_POLICIES,
+    GRIDWORLD_AVAILABLE_ACTIONS,
+    TRIPLE_POLICIES,
+    TRIVIAL_POLICIES,
+)
+# Ensure local imports work when executed outside the repo root.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from pi2vec.pi2vec_utils import create_canonical_states, state_to_vector
 from pi2vec.train_successor import train_and_save_successor_model
 from policy_reusability.env.gridworld import GridWorld
-from policy_reusability.my_work.init_gridworld import init_gridworld_rand
+from policy_reusability.data_generation.gridworld_factory import init_gridworld_rand
+from policy_reusability.pruning import run_pruning_multi
 from search_faiss_policies import PolicyRetriever
 
 
@@ -43,12 +60,109 @@ def load_q_table_from_metadata(policy: dict) -> np.ndarray | None:
     return q_table
 
 
+def load_initial_grid(states_root: str, setup: str, seed: str) -> np.ndarray | None:
+    seed_dir = os.path.join(states_root, setup, f"seed_{seed}", "episodes")
+    episode_dirs = sorted(glob.glob(os.path.join(seed_dir, "episode_*")))
+    if not episode_dirs:
+        return None
+    states_path = os.path.join(episode_dirs[0], "episode_states.npy")
+    if not os.path.exists(states_path):
+        return None
+    states = np.load(states_path)
+    if states.ndim == 3:
+        return states[0]
+    return states
+
+
+def build_env_from_grid(
+    grid: np.ndarray, reward_system: str, legacy_gold_exit_penalty: bool = False
+) -> GridWorld:
+    grid_size = grid.shape[0]
+    agent_positions = np.argwhere(grid == 7)
+    target_positions = np.argwhere(grid == 10)
+    gold_positions = np.argwhere(grid == 1)
+    block_positions = np.argwhere(grid == -1)
+    hazard_positions = np.argwhere(grid == -2)
+    lever_positions = np.argwhere(grid == 2)
+
+    agent_position = (
+        agent_positions[0].tolist() if len(agent_positions) > 0 else [0, 0]
+    )
+    target_position = (
+        target_positions[0].tolist()
+        if len(target_positions) > 0
+        else [grid_size - 1, grid_size - 1]
+    )
+    lever_position = lever_positions[0].tolist() if len(lever_positions) > 0 else None
+
+    cell_low_value = min(-1, -2)
+    cell_high_value = 10
+
+    return GridWorld(
+        grid_width=grid_size,
+        grid_length=grid_size,
+        gold_positions=[pos.tolist() for pos in gold_positions],
+        block_positions=[pos.tolist() for pos in block_positions],
+        hazard_positions=[pos.tolist() for pos in hazard_positions],
+        lever_position=lever_position,
+        reward_system=reward_system,
+        agent_position=agent_position,
+        target_position=target_position,
+        cell_high_value=cell_high_value,
+        cell_low_value=cell_low_value,
+        start_position_value=5,
+        target_position_value=10,
+        block_position_value=-1,
+        gold_position_value=1,
+        hazard_position_value=-2,
+        lever_position_value=2,
+        agent_position_value=7,
+        block_reward=-1,
+        target_reward=100,
+        gold_k=0,
+        n=0,
+        action_size=4,
+        parameterized=False,
+        alpha_beta=(1, 1),
+        step_penalty=0.0,
+        hazard_penalty=0.0,
+        exit_without_lever_penalty=0.0,
+        legacy_gold_exit_penalty=legacy_gold_exit_penalty,
+    )
+
+
+def normalize_seed(seed: str | int) -> str:
+    seed_str = str(seed)
+    return seed_str.zfill(4) if seed_str.isdigit() else seed_str
+
+
+def init_env_from_run(
+    states_root: str,
+    setup: str,
+    seed: str,
+    grid_size: int,
+    legacy_gold_exit_penalty: bool = False,
+) -> GridWorld:
+    seed_str = normalize_seed(seed)
+    grid = load_initial_grid(states_root, setup, seed_str)
+    if grid is None:
+        return init_gridworld_rand(
+            seed=int(seed_str),
+            reward_system=setup,
+            grid_size=grid_size,
+            legacy_gold_exit_penalty=legacy_gold_exit_penalty,
+        )
+    return build_env_from_grid(
+        grid, reward_system=setup, legacy_gold_exit_penalty=legacy_gold_exit_penalty
+    )
+
+
 def greedy_eval(
     env: GridWorld, q_table: np.ndarray, max_steps: int | None = None
 ) -> float:
     env.reset().flatten()
     if max_steps is None:
-        max_steps = env.grid_length + env.grid_width + 1
+        max_steps = env.grid_length * env.grid_width
     total_reward = 0.0
     state_index = env.state_to_index(env.agent_position)
     for _ in range(max_steps):
@@ -67,7 +181,7 @@ def generate_transitions(
     """Greedy rollout transitions (state_vec, next_state_vec) for successor training."""
     env.reset().flatten()
     if max_steps is None:
-        max_steps = env.grid_length + env.grid_width + 1
+        max_steps = env.grid_length * env.grid_width
     transitions = []
     state_vec = state_to_vector(env.grid.copy())
     state_index = env.state_to_index(env.agent_position)
@@ -83,9 +197,52 @@ def generate_transitions(
     return transitions
 
 
+def action_from_indices(state_1_index: int, state_2_index: int, env_length: int):
+    state_1 = GridWorld.index_to_state(state_1_index, env_length)
+    state_2 = GridWorld.index_to_state(state_2_index, env_length)
+
+    if state_2[0] == state_1[0] + 1 and state_2[1] == state_1[1]:
+        return 1  # down
+    if state_2[0] == state_1[0] and state_2[1] == state_1[1] + 1:
+        return 0  # right
+    if state_2[0] == state_1[0] and state_2[1] == state_1[1] + 2:
+        return 2  # right x2
+    if state_2[0] == state_1[0] + 2 and state_2[1] == state_1[1]:
+        return 3  # down x2
+    return None
+
+
+def transitions_from_path(env: GridWorld, path: list[int]):
+    env.reset().flatten()
+    if not path or len(path) < 2:
+        return [], 0.0
+    transitions = []
+    total_reward = 0.0
+    state_vec = state_to_vector(env.grid.copy())
+    for idx in range(len(path) - 1):
+        action = action_from_indices(path[idx], path[idx + 1], env.grid_length)
+        if action is None:
+            break
+        _, reward, done, _ = env.step(action)
+        total_reward += reward
+        next_vec = state_to_vector(env.grid.copy())
+        transitions.append((state_vec, next_vec))
+        state_vec = next_vec
+        if done:
+            break
+    return transitions, total_reward
+
+
 def combine_q_tables(q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
     # Simple deterministic merge: sum Q-values
     return q1 + q2
+
+
+def combine_q_tables_list(q_tables: list[np.ndarray]) -> np.ndarray:
+    combined = q_tables[0]
+    for qt in q_tables[1:]:
+        combined = combined + qt
+    return combined
 
 
 def fetch_candidates(
@@ -102,9 +259,13 @@ def fetch_candidates(
 
 
 def decompose_query_with_retry(
-    retriever: PolicyRetriever, query: str, max_attempts: int = 5
+    retriever: PolicyRetriever,
+    query: str,
+    max_attempts: int = 5,
+    expected_count: int | None = None,
+    policy_list: list[str] | None = None,
 ):
-    """Decompose query with retry logic (up to 5 LLM calls)."""
+    """Decompose query with retry logic (up to max_attempts LLM calls)."""
     total_decomp_time = 0.0
     attempts = 0
     sub_queries = None
@@ -113,21 +274,38 @@ def decompose_query_with_retry(
         attempts += 1
         start = time.time()
         try:
-            sub_queries = retriever.decompose_query(query)
+            sub_queries = retriever.decompose_query(
+                query, policy_list=policy_list, expected_count=expected_count
+            )
             elapsed = time.time() - start
             total_decomp_time += elapsed
 
             # Check if decomposition is valid (has at least 1 sub-query)
-            if sub_queries and len(sub_queries) > 0:
+            valid_count = expected_count is None or len(sub_queries) == expected_count
+            valid_list = True
+            if policy_list:
+                valid_list = all(q in policy_list for q in sub_queries)
+            if sub_queries and len(sub_queries) > 0 and valid_count and valid_list:
                 print(
                     f"Decomposed query into {len(sub_queries)} sub-queries in {elapsed:.6f}s (attempt {attempts}/{max_attempts})"
                 )
                 break
             else:
                 if attempts < max_attempts:
-                    print(
-                        f"Decomposition returned empty/invalid result; retrying (attempt {attempts + 1}/{max_attempts})"
-                    )
+                    if expected_count is not None and sub_queries:
+                        print(
+                            f"Decomposition returned {len(sub_queries)} sub-queries; expected {expected_count}. "
+                            f"Retrying (attempt {attempts + 1}/{max_attempts})"
+                        )
+                    elif policy_list and sub_queries and not valid_list:
+                        print(
+                            "Decomposition returned sub-queries outside the allowed policy list; "
+                            f"retrying (attempt {attempts + 1}/{max_attempts})"
+                        )
+                    else:
+                        print(
+                            f"Decomposition returned empty/invalid result; retrying (attempt {attempts + 1}/{max_attempts})"
+                        )
         except Exception as e:
             elapsed = time.time() - start
             total_decomp_time += elapsed
@@ -140,6 +318,10 @@ def decompose_query_with_retry(
 
     if sub_queries is None or len(sub_queries) == 0:
         raise ValueError(f"Failed to decompose query after {max_attempts} attempts")
+    if expected_count is not None and len(sub_queries) != expected_count:
+        raise ValueError(
+            f"Failed to decompose query into {expected_count} sub-queries after {max_attempts} attempts"
+        )
 
     print(
         f"Decomposition completed in {total_decomp_time:.6f}s total (reused for targeted/exhaustive)"
@@ -169,6 +351,9 @@ def decomposed_candidates(
             if isinstance(emb, list):
                 emb = np.array(emb)
             if retriever.regressor_model:
+                expected = getattr(retriever.regressor_model, "n_features_in_", None)
+                if expected is not None and emb.shape[0] != expected:
+                    continue
                 pred = float(retriever.regressor_model.predict(emb.reshape(1, -1))[0])
             else:
                 pred = 0.0
@@ -211,11 +396,34 @@ def targeted_composition(
     return q_combined, (p1, p2), (p1.get("dag"), p2.get("dag")), elapsed
 
 
+def compose_with_dag(
+    env: GridWorld,
+    dags: list,
+    learning_rate: float = 0.1,
+    discount_factor: float = 0.99,
+):
+    if not dags or any(d is None for d in dags):
+        return None, None, None
+    n_steps = getattr(dags[0], "N", env.grid_length * env.grid_width)
+    best_path, max_reward, elapsed, _ = run_pruning_multi(
+        env, dags, learning_rate, discount_factor, N=n_steps
+    )
+    return best_path, max_reward, elapsed
+
+
 def embedding_from_qtable(
     env: GridWorld, q_table: np.ndarray, canonical_states, seed_val: int
 ):
     transitions = generate_transitions(env, q_table)
-    # policy_name needs three parts for train_and_save_successor_model (target_seed_progress)
+    # policy_name must include seed as the second-to-last underscore component.
+    policy_name = f"combined_{seed_val:04d}_tmp"
+    _, embedding = train_and_save_successor_model(
+        policy_name, transitions, canonical_states, epochs=50, show_progress=True
+    )
+    return embedding
+
+
+def embedding_from_transitions(transitions, canonical_states, seed_val: int):
     policy_name = f"combined_{seed_val:04d}_tmp"
     _, embedding = train_and_save_successor_model(
         policy_name, transitions, canonical_states, epochs=50, show_progress=True
@@ -228,53 +436,95 @@ def exhaustive_composition(
     seed: str | None,
     sub_queries,
     canonical_states,
-    grid_size: int = 64,
+    env: GridWorld,
+    similarity_threshold: float = 0.7,
+    composition_method: str = "qsum",
 ):
     start = time.time()
-    candidates, candidate_time = fetch_candidates(retriever, sub_queries, seed)
-    # Group by policy_target to ensure gold/path pairings
-    gold_pols = [p for p in candidates if p.get("policy_target") == "gold"]
-    path_pols = [p for p in candidates if p.get("policy_target") == "path"]
+    grouped_candidates = []
+    search_time = 0.0
+    for sq in sub_queries:
+        result_dict, timing = retriever.vdb.search_similar_policies(
+            sq, policy_seed=seed
+        )
+        if isinstance(timing, dict):
+            search_time += timing.get("total_time", 0.0)
+        else:
+            search_time += timing
+        results = result_dict.get("results", [])
+        results = [r for r in results if r.get("score", 0) > similarity_threshold]
+        grouped_candidates.append(results)
+
+    candidate_counts = [len(cands) for cands in grouped_candidates]
     print(
-        f"[seed {seed}] exhaustive: candidates={len(candidates)}, gold={len(gold_pols)}, path={len(path_pols)}, search_time={candidate_time:.6f}s (decomp reused)"
+        f"[seed {seed}] exhaustive: sub_queries={len(sub_queries)}, candidates={candidate_counts}, search_time={search_time:.6f}s (decomp reused)"
     )
+
+    if any(count == 0 for count in candidate_counts):
+        print(
+            f"[seed {seed}] exhaustive: insufficient candidates for one or more sub-queries."
+        )
+        return None, time.time() - start
 
     best = None
     best_pred = -float("inf")
 
-    for g in gold_pols:
-        qg = load_q_table_from_metadata(g)
-        if qg is None:
-            continue
-        for p in path_pols:
-            qp = load_q_table_from_metadata(p)
-            if qp is None:
+    combos = list(itertools.product(*grouped_candidates))
+    print(f"[seed {seed}] exhaustive: combos={len(combos)}")
+
+    for combo in combos:
+        seed_val = int(seed) if seed else int(combo[0].get("policy_seed", 0))
+        if composition_method == "exnonzero":
+            dags = [p.get("dag") for p in combo]
+            if any(d is None for d in dags):
                 continue
-            # Build env for this seed (combined reward) to check expected Q-table size
-            seed_val = int(seed) if seed else int(g.get("policy_seed", 0))
-            env = init_gridworld_rand(
-                seed=seed_val, reward_system="combined", grid_size=grid_size
-            )
+            if any(getattr(d, "env_length", None) != env.grid_length for d in dags):
+                continue
+            path, _, _ = compose_with_dag(env, dags)
+            if path is None:
+                continue
+            transitions, eval_reward = transitions_from_path(env, path)
+            if not transitions:
+                continue
+            if retriever.regressor_model:
+                embedding = embedding_from_transitions(
+                    transitions, canonical_states, seed_val
+                )
+                pred = float(
+                    retriever.regressor_model.predict(
+                        np.array(embedding).reshape(1, -1)
+                    )[0]
+                )
+            else:
+                pred = 0.0
+            if pred > best_pred:
+                best_pred = pred
+                best = {
+                    "policies": combo,
+                    "reward": eval_reward,
+                    "seed": seed_val,
+                }
+        else:
+            q_tables = []
+            missing = []
+            for p in combo:
+                q = load_q_table_from_metadata(p)
+                if q is None:
+                    missing.append(p.get("policy_name", "unknown"))
+                    continue
+                q_tables.append(q)
+            if missing or len(q_tables) != len(combo):
+                continue
+
             expected_states = env.grid_length * env.grid_width
-
-            # Validate Q-table sizes match environment
-            if qg.shape[0] != expected_states:
-                print(
-                    f"    [seed {seed}] Skipping pair ({g.get('policy_name')}, {p.get('policy_name')}): "
-                    f"Q-table size {qg.shape[0]} doesn't match environment size {expected_states}"
-                )
-                continue
-            if qp.shape[0] != expected_states:
-                print(
-                    f"    [seed {seed}] Skipping pair ({g.get('policy_name')}, {p.get('policy_name')}): "
-                    f"Q-table size {qp.shape[0]} doesn't match environment size {expected_states}"
-                )
+            expected_actions = env.action_space.n
+            if any(
+                q.shape[0] != expected_states or q.shape[1] != expected_actions
+                for q in q_tables
+            ):
                 continue
 
-            q_combined = combine_q_tables(qg, qp)
-            print(
-                f"    [seed {seed}] training successor on pair ({g.get('policy_name')}, {p.get('policy_name')})"
-            )
+            q_combined = combine_q_tables_list(q_tables)
             embedding = embedding_from_qtable(
                 env, q_combined, canonical_states, seed_val
             )
@@ -290,7 +540,7 @@ def exhaustive_composition(
             if pred > best_pred:
                 best_pred = pred
                 best = {
-                    "pair": (g, p),
+                    "policies": combo,
                     "q_combined": q_combined,
                     "seed": seed_val,
                 }
@@ -302,202 +552,592 @@ def exhaustive_composition(
     return best, elapsed
 
 
-def load_canonical_states(states_folder: str = "states_16", canonical_states: int = 64):
+def hybrid_composition(
+    retriever: PolicyRetriever,
+    seed: str | None,
+    sub_queries,
+    canonical_states,
+    env: GridWorld,
+    top_k: int = 3,
+    similarity_threshold: float = 0.7,
+    composition_method: str = "qsum",
+):
+    start = time.time()
+    grouped_candidates = []
+    search_time = 0.0
+
+    for sq in sub_queries:
+        result_dict, timing = retriever.vdb.search_similar_policies(
+            sq, policy_seed=seed
+        )
+        if isinstance(timing, dict):
+            search_time += timing.get("total_time", 0.0)
+        else:
+            search_time += timing
+        results = result_dict.get("results", [])
+        results = [r for r in results if r.get("score", 0) > similarity_threshold]
+        for r in results:
+            emb = r.get("policy_embedding")
+            if emb is None:
+                continue
+            if isinstance(emb, list):
+                emb = np.array(emb)
+            if retriever.regressor_model:
+                expected = getattr(retriever.regressor_model, "n_features_in_", None)
+                if expected is not None and emb.shape[0] != expected:
+                    continue
+                pred = float(retriever.regressor_model.predict(emb.reshape(1, -1))[0])
+            else:
+                pred = 0.0
+            r["regressor_score"] = pred
+        results = sorted(
+            results, key=lambda x: x.get("regressor_score", -1), reverse=True
+        )
+        top = results[:top_k]
+        grouped_candidates.append(top)
+
+    if any(len(cands) == 0 for cands in grouped_candidates):
+        print(
+            f"[seed {seed}] hybrid: insufficient candidates for one or more sub-queries."
+        )
+        return None, time.time() - start
+
+    combos = list(itertools.product(*grouped_candidates))
+    print(
+        f"[seed {seed}] hybrid: sub_queries={len(sub_queries)}, top_k={top_k}, combos={len(combos)}, search_time={search_time:.6f}s"
+    )
+
+    best = None
+    best_pred = -float("inf")
+
+    for combo in combos:
+        seed_val = int(seed) if seed else int(combo[0].get("policy_seed", 0))
+        if composition_method == "exnonzero":
+            dags = [p.get("dag") for p in combo]
+            if any(d is None for d in dags):
+                continue
+            if any(getattr(d, "env_length", None) != env.grid_length for d in dags):
+                continue
+            path, _, _ = compose_with_dag(env, dags)
+            if path is None:
+                continue
+            transitions, eval_reward = transitions_from_path(env, path)
+            if not transitions:
+                continue
+            if retriever.regressor_model:
+                embedding = embedding_from_transitions(
+                    transitions, canonical_states, seed_val
+                )
+                pred = float(
+                    retriever.regressor_model.predict(
+                        np.array(embedding).reshape(1, -1)
+                    )[0]
+                )
+            else:
+                pred = 0.0
+            if pred > best_pred:
+                best_pred = pred
+                best = {
+                    "policies": combo,
+                    "reward": eval_reward,
+                    "seed": seed_val,
+                }
+        else:
+            q_tables = []
+            missing = []
+            for p in combo:
+                q = load_q_table_from_metadata(p)
+                if q is None:
+                    missing.append(p.get("policy_name", "unknown"))
+                    continue
+                q_tables.append(q)
+            if missing or len(q_tables) != len(combo):
+                continue
+
+            expected_states = env.grid_length * env.grid_width
+            if any(q.shape[0] != expected_states for q in q_tables):
+                continue
+
+            q_combined = combine_q_tables_list(q_tables)
+            embedding = embedding_from_qtable(
+                env, q_combined, canonical_states, seed_val
+            )
+            pred = (
+                float(
+                    retriever.regressor_model.predict(
+                        np.array(embedding).reshape(1, -1)
+                    )[0]
+                )
+                if retriever.regressor_model
+                else 0.0
+            )
+            if pred > best_pred:
+                best_pred = pred
+                best = {
+                    "policies": combo,
+                    "q_combined": q_combined,
+                    "seed": seed_val,
+                }
+
+    elapsed = time.time() - start
+    print(
+        f"[seed {seed}] hybrid total_time={elapsed:.6f}s (search + top-k combos + SF training + regressor scoring)"
+    )
+    return best, elapsed
+
+
+def load_canonical_states(
+    states_folder: str = "states_16",
+    canonical_states: int = 64,
+    run_dir: str | None = None,
+):
     """
     Load canonical states, creating them if they don't exist.
 
     Args:
-        states_folder: Name of the folder containing states (e.g., "states_16", "states_64")
-        canonical_states: Total number of canonical states to collect (default: 64)
+        states_folder: Name of the folder containing states (e.g., "states_16").
+        canonical_states: Total number of canonical states to collect (default: 64).
+        run_dir: Path to a state_runs/<spec> folder; overrides states_folder.
     """
-    # Use folder-specific filename to avoid conflicts between different grid sizes
-    canonical_file = f"data/canonical_states_{states_folder}.npy"
-
-    if os.path.exists(canonical_file):
-        loaded = np.load(canonical_file)
-        # Verify dimensions match expected based on states_folder
-        # Handle variations like states_16, states_16_1, states_64, etc.
-        if states_folder.startswith("states_16"):
-            expected_dim = 63  # 16x16 grids: 13 + 50 = 63
-        elif states_folder.startswith("states_64"):
-            expected_dim = 213  # 64x64 grids: 13 + 200 = 213
-        else:
-            # Default fallback
-            expected_dim = 63
-        if loaded.shape[0] > 0 and loaded.shape[1] == expected_dim:
-            return loaded
-        # If dimensions don't match, recreate
-        print(
-            f"Warning: {canonical_file} has wrong dimensions (got {loaded.shape[1]}, expected {expected_dim}), recreating..."
-        )
-
-    # Create new canonical states
     canonical_states_array = np.array(
         create_canonical_states(
-            states_folder=states_folder, canonical_states=canonical_states
+            states_folder=states_folder,
+            canonical_states=canonical_states,
+            run_dir=run_dir,
         )
     )
-    # Save with folder-specific name
-    os.makedirs("data", exist_ok=True)
-    np.save(canonical_file, canonical_states_array)
     return canonical_states_array
+
+
+TRIVIAL_EXPERIMENTS = [
+    {
+        "setup": "path-gold",
+        "query": "Find the fastest exit and collect as much gold as possible",
+        "expected_count": 2,
+    },
+    {
+        "setup": "path-gold-hazard",
+        "query": "Find the fastest exit, collect as much gold as possible, avoid hazards at all cost",
+        "expected_count": 3,
+    },
+    {
+        "setup": "path-gold-hazard-lever",
+        "query": "Find the fastest exit after activating the lever, collect as much gold as possible, avoid hazards at all cost",
+        "expected_count": 4,
+    },
+]
+
+DOUBLE_EXPERIMENTS = [
+    {
+        "setup": "path-gold-hazard",
+        "query": "Find the fastest exit, collect as much gold as possible, avoid hazards at all cost",
+        "expected_count": 2,
+    },
+    {
+        "setup": "path-gold-hazard-lever",
+        "query": "Find the fastest exit after activating the lever, collect as much gold as possible, avoid hazards at all cost",
+        "expected_count": 2,
+    },
+]
+
+TRIPLE_EXPERIMENTS = [
+    {
+        "setup": "path-gold-hazard-lever",
+        "query": "Find the fastest exit after activating the lever, collect as much gold as possible, avoid hazards at all cost",
+        "expected_count": 2,
+    },
+]
+
+
+def _infer_grid_size_from_states(states_root: str) -> int | None:
+    if not os.path.isdir(states_root):
+        return None
+    pattern = os.path.join(states_root, "**", "episode_states.npy")
+    for npy_path in glob.glob(pattern, recursive=True):
+        try:
+            states = np.load(npy_path, mmap_mode="r")
+        except Exception:
+            continue
+        if states.ndim == 3:
+            grid = states[0]
+        else:
+            grid = states
+        if grid.ndim >= 2:
+            return int(grid.shape[0])
+    return None
+
+
+def infer_grid_and_canonical(states_root: str) -> tuple[int, int]:
+    grid_size = _infer_grid_size_from_states(states_root)
+    if grid_size is None:
+        base = os.path.basename(os.path.normpath(states_root))
+        match = re.search(r"states_(\d+)", base)
+        if match:
+            grid_size = int(match.group(1))
+    if grid_size is None:
+        grid_size = 16
+    canonical_by_grid = {6: 32, 16: 64, 32: 128, 64: 256}
+    canonical_states_count = canonical_by_grid.get(grid_size, 128)
+    return grid_size, canonical_states_count
 
 
 def run_full_experiment(
     output_csv: str,
-    query: str,
     seed_list: list[str] | None = None,
-    states_folder: str = "states_64",
+    states_folder: str = "state_runs",
+    hybrid_top_k: int = 3,
+    setups: list[str] | None = None,
+    spec_label: str | None = None,
+    experiments: list[dict] | None = None,
+    policy_list: list[str] | None = None,
+    generate_plots: bool = True,
+    index_path: str = "faiss_index/policy.index",
+    metadata_path: str = "faiss_index/metadata.pkl",
+    composition_method: str = "qsum",
+    legacy_gold_exit_penalty: bool = False,
 ):
     retriever = PolicyRetriever(
+        index_path=index_path,
+        metadata_path=metadata_path,
         application_name="Grid World",
-        available_actions=[
-            "move up",
-            "move right",
-            "move right x2",
-            "move down x2",
-            "move diagonal",
-        ],
+        available_actions=GRIDWORLD_AVAILABLE_ACTIONS,
     )
 
-    # Determine grid size and canonical states count based on states_folder
-    # Handle variations like states_16, states_16_1, states_64, etc.
-    if states_folder.startswith("states_16"):
-        grid_size = 16
-        canonical_states_count = 64
-    elif states_folder.startswith("states_64"):
-        grid_size = 64
-        canonical_states_count = 256
-    else:
-        # Default to 64x64
-        print(
-            f"Warning: Unknown states_folder '{states_folder}', defaulting to 64x64 grid"
-        )
-        grid_size = 64
-        canonical_states_count = 256
+    states_root = (
+        states_folder
+        if os.path.isdir(states_folder)
+        else os.path.join(os.getcwd(), states_folder)
+    )
+    states_root_name = os.path.basename(os.path.normpath(states_root))
 
+    if spec_label is None:
+        base_name = os.path.basename(os.path.normpath(states_root))
+        spec_label = base_name.split("_")[0] if base_name else "unknown"
+
+    grid_size, canonical_states_count = infer_grid_and_canonical(states_root)
+    run_dir = (
+        states_root
+        if os.path.isdir(states_root) and not states_root_name.startswith("states_")
+        else None
+    )
     canonical_states = load_canonical_states(
-        states_folder=states_folder, canonical_states=canonical_states_count
+        states_folder=states_root_name,
+        canonical_states=canonical_states_count,
+        run_dir=run_dir,
     )
 
     rows = []
+    if experiments is None:
+        experiments = TRIVIAL_EXPERIMENTS
+    if setups is not None:
+        experiments = [e for e in experiments if e["setup"] in setups]
+    plot_setups = setups or sorted({e["setup"] for e in experiments})
     seeds = seed_list or sorted(
         {m.get("policy_seed") for m in retriever.vdb.metadata if m.get("policy_seed")}
     )
 
-    # Decompose query once and reuse for all seeds
-    print("Decomposing query (shared across all seeds)...")
-    sub_queries, decomp_time = decompose_query_with_retry(
-        retriever, query, max_attempts=5
-    )
-    print(
-        f"Query decomposed into {len(sub_queries)} sub-queries. Reusing for all seeds.\n"
-    )
+    for exp in experiments:
+        setup = exp["setup"]
+        query = exp["query"]
+        expected_count = exp.get("expected_count")
 
-    for seed in seeds:
-        print(f"\n=== Running seed {seed} ===")
-        # Scratch reward
-        scratch_q_path = os.path.join(
-            states_folder, "combined", f"seed_{seed}", "q_table_final.npy"
-        )
-        scratch_reward = None
-        if os.path.exists(scratch_q_path):
-            print(f"[seed {seed}] Loading scratch combined q_table: {scratch_q_path}")
-            env = init_gridworld_rand(
-                seed=int(seed), reward_system="combined", grid_size=grid_size
-            )
-            scratch_q = np.load(scratch_q_path)
-            expected_states = env.grid_length * env.grid_width
-            if scratch_q.shape[0] != expected_states:
-                print(
-                    f"[seed {seed}] scratch q_table size {scratch_q.shape[0]} doesn't match "
-                    f"environment size {expected_states}. Skipping scratch evaluation."
-                )
-            else:
-                scratch_reward = greedy_eval(env, scratch_q)
-                print(f"[seed {seed}] scratch_reward: {scratch_reward}")
-        else:
-            print(f"[seed {seed}] scratch q_table not found at {scratch_q_path}")
-
-        # Targeted (using shared decomposition)
         print(
-            f"[seed {seed}] Starting targeted composition (shared decomposition + sim>0.7 + regressor rank)"
+            f"\nDecomposing query for setup {setup} (expected sub-queries: {expected_count})..."
         )
-        q_tgt, pair_tgt, dags_tgt, t_targeted = targeted_composition(
-            retriever, seed, sub_queries, canonical_states
+        sub_queries, decomp_time = decompose_query_with_retry(
+            retriever,
+            query,
+            max_attempts=3,
+            expected_count=expected_count,
+            policy_list=policy_list,
         )
-        targeted_reward = None
-        if q_tgt is not None:
-            env = init_gridworld_rand(
-                seed=int(seed), reward_system="combined", grid_size=grid_size
-            )
-            targeted_reward = greedy_eval(env, q_tgt)
-            print(
-                f"[seed {seed}] targeted_reward: {targeted_reward} (composition time {t_targeted:.6f}s)"
-            )
-        else:
-            if t_targeted is not None:
-                print(
-                    f"[seed {seed}] targeted composition failed (composition time {t_targeted:.6f}s)"
-                )
-            else:
-                print(f"[seed {seed}] targeted composition failed")
-
-        # Exhaustive
         print(
-            f"[seed {seed}] Starting exhaustive composition (shared decomposition + all gold/path pairs)"
+            f"Query decomposed into {len(sub_queries)} sub-queries. Reusing for all seeds.\n"
         )
-        best_exh, t_exhaustive = exhaustive_composition(
-            retriever, seed, sub_queries, canonical_states, grid_size=grid_size
-        )
-        exhaustive_reward = None
-        if best_exh is not None:
-            env = init_gridworld_rand(
-                seed=int(seed), reward_system="combined", grid_size=grid_size
+
+        for seed in seeds:
+            seed_name = normalize_seed(seed)
+            print(f"\n=== Running setup {setup} | seed {seed_name} ===")
+            env = init_env_from_run(
+                states_root,
+                setup,
+                seed_name,
+                grid_size,
+                legacy_gold_exit_penalty=legacy_gold_exit_penalty,
             )
-            exhaustive_reward = greedy_eval(env, best_exh["q_combined"])
+            # Scratch reward
+            scratch_q_path = os.path.join(
+                states_root, setup, f"seed_{seed_name}", "q_table_final.npy"
+            )
+            scratch_time_s = None
+            rewards_path = os.path.join(
+                states_root, setup, f"seed_{seed_name}", "episode_rewards.csv"
+            )
+            if os.path.exists(rewards_path):
+                try:
+                    df_rewards = pd.read_csv(rewards_path)
+                    if "time" in df_rewards.columns and not df_rewards["time"].isna().all():
+                        scratch_time_s = float(df_rewards["time"].dropna().iloc[-1])
+                except Exception as e:
+                    print(f"[seed {seed}] Warning: failed to read {rewards_path}: {e}")
+            scratch_reward = None
+            if os.path.exists(scratch_q_path):
+                print(f"[seed {seed_name}] Loading scratch q_table: {scratch_q_path}")
+                scratch_q = np.load(scratch_q_path)
+                expected_states = env.grid_length * env.grid_width
+                if scratch_q.shape[0] != expected_states:
+                    print(
+                        f"[seed {seed_name}] scratch q_table size {scratch_q.shape[0]} doesn't match "
+                        f"environment size {expected_states}. Skipping scratch evaluation."
+                    )
+                else:
+                    scratch_reward = greedy_eval(env, scratch_q)
+                    print(f"[seed {seed_name}] scratch_reward: {scratch_reward}")
+            else:
+                print(f"[seed {seed_name}] scratch q_table not found at {scratch_q_path}")
+
+            # Targeted (using shared decomposition)
             print(
-                f"[seed {seed}] exhaustive_reward: {exhaustive_reward} (composition time {t_exhaustive:.6f}s)"
+                f"[seed {seed_name}] Starting targeted composition (shared decomposition + sim>0.7 + regressor rank)"
             )
-        else:
-            if t_exhaustive is not None:
+            q_tgt, pair_tgt, dags_tgt, t_targeted = targeted_composition(
+                retriever, seed_name, sub_queries, canonical_states
+            )
+            targeted_reward = None
+            if composition_method == "exnonzero":
+                if dags_tgt is not None:
+                    path, _, t_comp = compose_with_dag(env, list(dags_tgt))
+                    if path is not None:
+                        transitions, eval_reward = transitions_from_path(env, path)
+                        if transitions:
+                            targeted_reward = eval_reward
+                            t_targeted = t_comp
+                            print(
+                                f"[seed {seed_name}] targeted_reward: {targeted_reward} (composition time {t_targeted:.6f}s)"
+                            )
+            elif q_tgt is not None:
+                targeted_reward = greedy_eval(env, q_tgt)
                 print(
-                    f"[seed {seed}] exhaustive composition failed (composition time {t_exhaustive:.6f}s)"
+                    f"[seed {seed_name}] targeted_reward: {targeted_reward} (composition time {t_targeted:.6f}s)"
                 )
             else:
-                print(f"[seed {seed}] exhaustive composition failed")
+                if t_targeted is not None:
+                    print(
+                        f"[seed {seed_name}] targeted composition failed (composition time {t_targeted:.6f}s)"
+                    )
+                else:
+                    print(f"[seed {seed_name}] targeted composition failed")
 
-        rows.append(
-            {
-                "seed": seed,
-                "scratch_reward": scratch_reward,
-                "targeted_reward": targeted_reward,
-                "exhaustive_reward": exhaustive_reward,
-                "decomp_time": round(decomp_time, 6),
-                "targeted_time": round(t_targeted, 6)
-                if t_targeted is not None
-                else None,
-                "exhaustive_time": round(t_exhaustive, 6)
-                if t_exhaustive is not None
-                else None,
-            }
-        )
+            # Exhaustive
+            print(
+                f"[seed {seed_name}] Starting exhaustive composition (shared decomposition + all gold/path pairs)"
+            )
+            best_exh, t_exhaustive = exhaustive_composition(
+                retriever,
+                seed_name,
+                sub_queries,
+                canonical_states,
+                env=env,
+                composition_method=composition_method,
+            )
+            exhaustive_reward = None
+            if best_exh is not None:
+                if composition_method == "exnonzero":
+                    exhaustive_reward = best_exh.get("reward")
+                else:
+                    exhaustive_reward = greedy_eval(env, best_exh["q_combined"])
+                print(
+                    f"[seed {seed_name}] exhaustive_reward: {exhaustive_reward} (composition time {t_exhaustive:.6f}s)"
+                )
+            else:
+                if t_exhaustive is not None:
+                    print(
+                        f"[seed {seed_name}] exhaustive composition failed (composition time {t_exhaustive:.6f}s)"
+                    )
+                else:
+                    print(f"[seed {seed_name}] exhaustive composition failed")
+
+            # Hybrid
+            print(
+                f"[seed {seed_name}] Starting hybrid composition (shared decomposition + top-k per sub-query)"
+            )
+            best_hyb, t_hybrid = hybrid_composition(
+                retriever,
+                seed_name,
+                sub_queries,
+                canonical_states,
+                env=env,
+                top_k=hybrid_top_k,
+                composition_method=composition_method,
+            )
+            hybrid_reward = None
+            if best_hyb is not None:
+                if composition_method == "exnonzero":
+                    hybrid_reward = best_hyb.get("reward")
+                else:
+                    hybrid_reward = greedy_eval(env, best_hyb["q_combined"])
+                print(
+                    f"[seed {seed_name}] hybrid_reward: {hybrid_reward} (composition time {t_hybrid:.6f}s)"
+                )
+            else:
+                if t_hybrid is not None:
+                    print(
+                        f"[seed {seed_name}] hybrid composition failed (composition time {t_hybrid:.6f}s)"
+                    )
+                else:
+                    print(f"[seed {seed_name}] hybrid composition failed")
+
+            rows.append(
+                {
+                    "setup": setup,
+                    "spec": spec_label,
+                    "seed": seed_name,
+                    "query": query,
+                    "scratch_reward": scratch_reward,
+                    "scratch_time_s": scratch_time_s,
+                    "targeted_reward": targeted_reward,
+                    "exhaustive_reward": exhaustive_reward,
+                    "hybrid_reward": hybrid_reward,
+                    "decomp_time": round(decomp_time, 6),
+                    "targeted_time": round(t_targeted, 6)
+                    if t_targeted is not None
+                    else None,
+                    "exhaustive_time": round(t_exhaustive, 6)
+                    if t_exhaustive is not None
+                    else None,
+                    "hybrid_time": round(t_hybrid, 6) if t_hybrid is not None else None,
+                }
+            )
 
     df = pd.DataFrame(rows)
     os.makedirs(os.path.dirname(output_csv) or ".", exist_ok=True)
     df.to_csv(output_csv, index=False)
     print(f"Wrote results to {output_csv}")
 
+    if generate_plots:
+        try:
+            from plots.compare_compositions import main as plot_main
+            import sys
+
+            plot_mode = None
+            lower_name = os.path.basename(output_csv).lower()
+            if "double" in lower_name:
+                plot_mode = "double"
+            elif "triple" in lower_name:
+                plot_mode = "triple"
+            elif "trivial" in lower_name:
+                plot_mode = "trivial"
+
+            argv = [
+                "compare_compositions",
+                "--input-csv",
+                output_csv,
+            ]
+            if plot_mode:
+                argv += ["--mode", plot_mode]
+            if plot_setups:
+                argv += ["--setups", *plot_setups]
+            if spec_label:
+                argv += ["--specs", spec_label]
+            sys.argv = argv
+            plot_main()
+        except Exception as e:
+            print(f"Warning: failed to generate plots: {e}")
+
+
+def _find_latest_run_dir(base_dir: str, spec: str) -> str | None:
+    if not os.path.isdir(base_dir):
+        return None
+    candidates = [
+        d
+        for d in os.listdir(base_dir)
+        if os.path.isdir(os.path.join(base_dir, d)) and d.startswith(f"{spec}_")
+    ]
+    if not candidates:
+        return None
+    return os.path.join(base_dir, sorted(candidates)[-1])
+
+
+def run_all_specs(
+    state_runs_dir: str = "state_runs",
+    specs: tuple[str, ...] = ("X1", "X5", "X10"),
+    results_dir: str = "results",
+    seed_list: list[str] | None = None,
+    hybrid_top_k: int = 3,
+    setups: list[str] | None = None,
+    generate_plots: bool = True,
+    index_path: str = "faiss_index/policy.index",
+    metadata_path: str = "faiss_index/metadata.pkl",
+    composition_method: str = "qsum",
+    legacy_gold_exit_penalty: bool = False,
+):
+    os.makedirs(results_dir, exist_ok=True)
+    for spec in specs:
+        run_dir = _find_latest_run_dir(state_runs_dir, spec)
+        if not run_dir:
+            print(f"Warning: no run_dir found for {spec} in {state_runs_dir}")
+            continue
+        spec_dir = os.path.join(results_dir, spec)
+        os.makedirs(spec_dir, exist_ok=True)
+
+        run_full_experiment(
+            os.path.join(spec_dir, "full_experiment_results_trivial.csv"),
+            seed_list,
+            states_folder=run_dir,
+            hybrid_top_k=hybrid_top_k,
+            setups=setups,
+            spec_label=spec,
+            experiments=TRIVIAL_EXPERIMENTS,
+            policy_list=TRIVIAL_POLICIES,
+            generate_plots=generate_plots,
+            index_path=index_path,
+            metadata_path=metadata_path,
+            composition_method=composition_method,
+            legacy_gold_exit_penalty=legacy_gold_exit_penalty,
+        )
+
+        run_full_experiment(
+            os.path.join(spec_dir, "full_experiment_results_double.csv"),
+            seed_list,
+            states_folder=run_dir,
+            hybrid_top_k=hybrid_top_k,
+            setups=setups,
+            spec_label=spec,
+            experiments=DOUBLE_EXPERIMENTS,
+            policy_list=DOUBLE_POLICIES,
+            generate_plots=generate_plots,
+            index_path=index_path,
+            metadata_path=metadata_path,
+            composition_method=composition_method,
+            legacy_gold_exit_penalty=legacy_gold_exit_penalty,
+        )
+
+        run_full_experiment(
+            os.path.join(spec_dir, "full_experiment_results_triple.csv"),
+            seed_list,
+            states_folder=run_dir,
+            hybrid_top_k=hybrid_top_k,
+            setups=setups,
+            spec_label=spec,
+            experiments=TRIPLE_EXPERIMENTS,
+            policy_list=TRIPLE_POLICIES,
+            generate_plots=generate_plots,
+            index_path=index_path,
+            metadata_path=metadata_path,
+            composition_method=composition_method,
+            legacy_gold_exit_penalty=legacy_gold_exit_penalty,
+        )
+
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run full targeted vs exhaustive composition experiment."
+        description="Run composition experiments with different policy pools."
     )
     parser.add_argument(
         "--output",
         type=str,
         default="full_experiment_results.csv",
-        help="Path to output CSV",
+        help="Path to output CSV (used when --mode is not 'all' or when --query is set)",
     )
     parser.add_argument(
         "--seeds",
@@ -508,19 +1148,199 @@ def main():
     parser.add_argument(
         "--query",
         type=str,
-        required=True,
-        help="Natural language query to decompose and search (used for both targeted and exhaustive)",
+        default=None,
+        help="Optional single query override (otherwise runs predefined queries)",
+    )
+    parser.add_argument(
+        "--expected-subtasks",
+        type=int,
+        default=None,
+        help="Expected sub-query count when using --query",
+    )
+    parser.add_argument(
+        "--setup",
+        type=str,
+        default=None,
+        help="Setup name for --query (e.g., path-gold)",
     )
     parser.add_argument(
         "--states-folder",
         type=str,
-        default="states_16",
-        help="States folder to use (states_16 for 16x16 grids, states_64 for 64x64 grids)",
+        default="state_runs",
+        help="states_* folder or state_runs/<spec>_<timestamp> path for canonical states",
+    )
+    parser.add_argument(
+        "--results-dir",
+        type=str,
+        default="results",
+        help="Base directory for per-spec experiment outputs when looping specs",
+    )
+    parser.add_argument(
+        "--setups",
+        nargs="*",
+        default=None,
+        help="Reward setups to evaluate (defaults depend on experiment mode)",
+    )
+    parser.add_argument(
+        "--spec",
+        type=str,
+        default=None,
+        help="Spec label to store in results (e.g., X1, X5, X10)",
+    )
+    parser.add_argument(
+        "--no-plots",
+        action="store_true",
+        help="Disable automatic plot generation after running experiments",
+    )
+    parser.add_argument(
+        "--hybrid-top-k",
+        type=int,
+        default=3,
+        help="Top-k per sub-query for hybrid composition",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["trivial", "double", "triple", "all"],
+        default="all",
+        help="Which experiment variant to run (default: all)",
+    )
+    parser.add_argument(
+        "--index-path",
+        type=str,
+        default="faiss_index/policy.index",
+        help="FAISS index path to use",
+    )
+    parser.add_argument(
+        "--metadata-path",
+        type=str,
+        default="faiss_index/metadata.pkl",
+        help="FAISS metadata path to use",
+    )
+    parser.add_argument(
+        "--composition-method",
+        choices=["qsum", "exnonzero"],
+        default="qsum",
+        help="Composition method to use (qsum or exnonzero)",
+    )
+    parser.add_argument(
+        "--legacy-gold-exit-penalty",
+        action="store_true",
+        help="Use legacy gold exit penalty (-20 if not all gold collected)",
+    )
+    parser.add_argument(
+        "--loop-specs",
+        action="store_true",
+        help="Run experiments for the latest X1/X5/X10 runs inside --states-folder",
     )
     args = parser.parse_args()
-    run_full_experiment(
-        args.output, args.query, args.seeds, states_folder=args.states_folder
-    )
+    experiments = None
+    if args.query:
+        if not args.setup:
+            raise ValueError("--setup is required when using --query")
+        experiments = [
+            {
+                "setup": args.setup,
+                "query": args.query,
+                "expected_count": args.expected_subtasks,
+            }
+        ]
+        run_full_experiment(
+            args.output,
+            args.seeds,
+            states_folder=args.states_folder,
+            hybrid_top_k=args.hybrid_top_k,
+            setups=args.setups,
+            spec_label=args.spec,
+            experiments=experiments,
+            policy_list=TRIVIAL_POLICIES,
+            generate_plots=not args.no_plots,
+            index_path=args.index_path,
+            metadata_path=args.metadata_path,
+            composition_method=args.composition_method,
+            legacy_gold_exit_penalty=args.legacy_gold_exit_penalty,
+        )
+        return
+
+    if args.loop_specs:
+        run_all_specs(
+            state_runs_dir=args.states_folder,
+            results_dir=args.results_dir,
+            seed_list=args.seeds,
+            hybrid_top_k=args.hybrid_top_k,
+            setups=args.setups,
+            generate_plots=not args.no_plots,
+            index_path=args.index_path,
+            metadata_path=args.metadata_path,
+            composition_method=args.composition_method,
+            legacy_gold_exit_penalty=args.legacy_gold_exit_penalty,
+        )
+        return
+
+    if args.mode in ("trivial", "all"):
+        output = (
+            args.output
+            if args.mode == "trivial"
+            else "full_experiment_results_trivial.csv"
+        )
+        run_full_experiment(
+            output,
+            args.seeds,
+            states_folder=args.states_folder,
+            hybrid_top_k=args.hybrid_top_k,
+            setups=args.setups,
+            spec_label=args.spec,
+            experiments=TRIVIAL_EXPERIMENTS,
+            policy_list=TRIVIAL_POLICIES,
+            generate_plots=not args.no_plots,
+            index_path=args.index_path,
+            metadata_path=args.metadata_path,
+            composition_method=args.composition_method,
+            legacy_gold_exit_penalty=args.legacy_gold_exit_penalty,
+        )
+
+    if args.mode in ("double", "all"):
+        output = (
+            args.output
+            if args.mode == "double"
+            else "full_experiment_results_double.csv"
+        )
+        run_full_experiment(
+            output,
+            args.seeds,
+            states_folder=args.states_folder,
+            hybrid_top_k=args.hybrid_top_k,
+            setups=args.setups,
+            spec_label=args.spec,
+            experiments=DOUBLE_EXPERIMENTS,
+            policy_list=DOUBLE_POLICIES,
+            generate_plots=not args.no_plots,
+            index_path=args.index_path,
+            metadata_path=args.metadata_path,
+            composition_method=args.composition_method,
+            legacy_gold_exit_penalty=args.legacy_gold_exit_penalty,
+        )
+
+    if args.mode in ("triple", "all"):
+        output = (
+            args.output
+            if args.mode == "triple"
+            else "full_experiment_results_triple.csv"
+        )
+        run_full_experiment(
+            output,
+            args.seeds,
+            states_folder=args.states_folder,
+            hybrid_top_k=args.hybrid_top_k,
+            setups=args.setups,
+            spec_label=args.spec,
+            experiments=TRIPLE_EXPERIMENTS,
+            policy_list=TRIPLE_POLICIES,
+            generate_plots=not args.no_plots,
+            index_path=args.index_path,
+            metadata_path=args.metadata_path,
+            composition_method=args.composition_method,
+            legacy_gold_exit_penalty=args.legacy_gold_exit_penalty,
+        )
 
 
 if __name__ == "__main__":

@@ -19,23 +19,31 @@ class SuccessorFeatureNetwork(nn.Module):
             nn.ReLU(),
         )
 
+        # Second layer: project output of first layer to output_dim (this is ψ_θ^π(s))
+        self.second_layer = nn.Sequential(
+            nn.Linear(128, 512),
+            nn.BatchNorm1d(512),
+            nn.ReLU(),
+        )
+
         # 3 layers of FC(output_dim) -> BN -> ReLU
         self.layers = nn.ModuleList(
             [
                 nn.Sequential(
-                    nn.Linear(128, 128),
-                    nn.BatchNorm1d(128),
+                    nn.Linear(512, 512),
+                    nn.BatchNorm1d(512),
                     nn.ReLU(),
                 )
-                for _ in range(3)
+                for _ in range(2)
             ]
         )
 
         # Final linear layer outputs successor features
-        self.output_layer = nn.Linear(128, output_dim)
+        self.output_layer = nn.Linear(512, output_dim)
 
     def forward(self, s: torch.Tensor) -> torch.Tensor:
         x = self.first_layer(s)
+        x = self.second_layer(x)
         for layer in self.layers:
             x = layer(x)
         return self.output_layer(x)

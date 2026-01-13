@@ -4,12 +4,39 @@ from datetime import datetime
 
 import numpy as np
 import pandas as pd
-from agents.q_agent import QLearningAgent, SarsaAgent
-from inference_q import inference_q
-from my_work.init_gridworld import init_gridworld_rand
-from utilities import plot_cummulative_reward
-
 from policy_reusability.DAG import DAG
+from policy_reusability.agents.q_agent import QLearningAgent, SarsaAgent
+from policy_reusability.data_generation.gridworld_factory import init_gridworld_rand
+from policy_reusability.inference_q import inference_q
+from policy_reusability.utilities import plot_cummulative_reward
+from pathlib import Path
+
+
+def _read_int(path: Path) -> int:
+    return int(path.read_text().strip())
+
+
+def find_rapl_package_paths():
+    rapl_root = Path("/sys/class/powercap")
+    default = rapl_root / "intel-rapl:0"
+    if (default / "energy_uj").exists():
+        return default / "energy_uj", default / "max_energy_range_uj"
+
+    candidates = sorted(rapl_root.rglob("energy_uj"))
+    if not candidates:
+        return None, None
+
+    energy_path = candidates[0]
+    max_path = energy_path.parent / "max_energy_range_uj"
+    if not max_path.exists():
+        return None, None
+    return energy_path, max_path
+
+
+def rapl_delta_uj(prev_uj: int, curr_uj: int, max_range_uj: int) -> int:
+    if curr_uj >= prev_uj:
+        return curr_uj - prev_uj
+    return (max_range_uj - prev_uj) + curr_uj
 
 
 def train_q_policy_for_states(
@@ -65,6 +92,21 @@ def train_q_policy_for_states(
 
     episodes_to_save = []
     episode_rewards = []
+    episode_times = []
+    episode_energy = []
+    cumulative_time = 0.0
+    cumulative_energy_j = 0.0
+    interval_energy_j = 0.0
+    interval_start_time = time.time()
+
+    energy_path, max_path = find_rapl_package_paths()
+    energy_available = energy_path is not None and max_path is not None
+    if energy_available:
+        max_range_uj = _read_int(max_path)
+        prev_energy_uj = _read_int(energy_path)
+    else:
+        max_range_uj = 0
+        prev_energy_uj = 0
 
     episodes_dir = os.path.join(directory_to_save, "episodes")
     os.makedirs(episodes_dir, exist_ok=True)
@@ -87,11 +129,13 @@ def train_q_policy_for_states(
         episode_states = None
         episode_actions = None
         episode_reward = None
+        episode_hazard_counts = None
         if is_episode_to_save:
             episode_states = [np.copy(grid_world.grid)]
             episode_actions = []
 
             episode_reward = 0
+            episode_hazard_counts = [grid_world.hazard_steps]
 
         for step in range(max_steps_per_episode):
             grid_world.visited_count_states[grid_world.agent_position[0]][
@@ -106,6 +150,7 @@ def train_q_policy_for_states(
                 episode_actions.append(action)
 
                 episode_reward += reward
+                episode_hazard_counts.append(grid_world.hazard_steps)
 
             cumulative_reward += reward
             next_state_index = grid_world.state_to_index(grid_world.agent_position)
@@ -127,11 +172,24 @@ def train_q_policy_for_states(
 
         if is_episode_to_save:
             episode_rewards.append(episode_reward)
+            episode_times.append(cumulative_time)
+            avg_power_w = 0.0
+            if energy_available:
+                interval_elapsed = max(time.time() - interval_start_time, 1e-9)
+                avg_power_w = interval_energy_j / interval_elapsed
+            episode_energy.append((cumulative_energy_j, avg_power_w))
+            interval_energy_j = 0.0
+            interval_start_time = time.time()
 
             episode_states = np.array(episode_states, dtype=np.int8)
             episode_actions = np.array(episode_actions, dtype=np.int8)
+            episode_hazard_counts = np.array(episode_hazard_counts, dtype=np.int32)
             np.save(os.path.join(episode_dir, "episode_states.npy"), episode_states)
             np.save(os.path.join(episode_dir, "episode_actions.npy"), episode_actions)
+            np.save(
+                os.path.join(episode_dir, "episode_hazard_counts.npy"),
+                episode_hazard_counts,
+            )
             np.save(os.path.join(episode_dir, "q_table.npy"), q_agent.q_table)
 
         # update lerning rate and explortion rate
@@ -143,6 +201,14 @@ def train_q_policy_for_states(
         # turn of stopwatch
         elapsed_time = time.time() - start_time
         total_time += elapsed_time
+        cumulative_time += elapsed_time
+        if energy_available:
+            curr_energy_uj = _read_int(energy_path)
+            delta_uj = rapl_delta_uj(prev_energy_uj, curr_energy_uj, max_range_uj)
+            delta_j = delta_uj / 1e6
+            cumulative_energy_j += delta_j
+            interval_energy_j += delta_j
+            prev_energy_uj = curr_energy_uj
 
         # log cumulative reward
 
@@ -153,7 +219,13 @@ def train_q_policy_for_states(
             )
 
     episode_rewards_df = pd.DataFrame(
-        {"episode": episodes_to_save, "reward": episode_rewards}
+        {
+            "episode": episodes_to_save,
+            "reward": [int(round(r)) for r in episode_rewards],
+            "time": episode_times,
+            "energy_j": [e for e, _ in episode_energy],
+            "avg_power_w": [p for _, p in episode_energy],
+        }
     )
     episode_rewards_df.to_csv(os.path.join(directory_to_save, "episode_rewards.csv"))
 
@@ -201,7 +273,7 @@ def main():
             # ======== Training parameters ========
             agent_type = "Sarsa"  # or "Q-learning"
             n_episodes = 300000
-            max_steps_per_episode = 16 + 16 + 1
+            max_steps_per_episode = grid_world.grid_width * grid_world.grid_length
             learning_rate = 0.1
             discount_factor = 0.99
             result_step_size = 10

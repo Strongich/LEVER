@@ -1,0 +1,6 @@
+setup,spec,seed,query,scratch_reward,scratch_time_s,targeted_reward,exhaustive_reward,hybrid_reward,decomp_time,targeted_time,exhaustive_time,hybrid_time
+path-gold-hazard-lever,X5,0000,"Find the fastest exit after activating the lever, collect as much gold as possible, avoid hazards at all cost",222.42999999999998,132.57700085639954,320.81,320.81,320.81,12.721751,0.350759,21.458379,7.58717
+path-gold-hazard-lever,X5,0001,"Find the fastest exit after activating the lever, collect as much gold as possible, avoid hazards at all cost",273.65000000000003,125.897531747818,302.43,302.43,302.43,12.721751,0.314611,21.197428,7.529025
+path-gold-hazard-lever,X5,0002,"Find the fastest exit after activating the lever, collect as much gold as possible, avoid hazards at all cost",273.65,123.2628562450409,300.41,300.41,300.41,12.721751,0.305916,21.12869,7.984678
+path-gold-hazard-lever,X5,0003,"Find the fastest exit after activating the lever, collect as much gold as possible, avoid hazards at all cost",219.64999999999998,131.312744140625,298.44,298.44,298.44,12.721751,0.313083,20.701983,7.497052
+path-gold-hazard-lever,X5,0004,"Find the fastest exit after activating the lever, collect as much gold as possible, avoid hazards at all cost",304.84999999999997,130.38993954658508,307.62,307.62,307.62,12.721751,0.72412,21.204753,7.618638
