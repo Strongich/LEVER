@@ -91,7 +91,7 @@ Composition methods:
 python search_faiss_policies.py "collect gold quickly"
 ```
 Optional filters and controls:
-- `--seed 0003` to search within a seed.
+- `--seed 0003` to search within a seed (required to stay in the same MDP layout).
 - `--filter-energy` to prefer low-energy policies.
 - `--no-decompose` to skip LLM decomposition.
 

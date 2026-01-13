@@ -97,8 +97,45 @@ def get_color(index: int) -> str:
 
 
 # Grid generation specs used by data_generation scripts.
-# Add entries here to run additional grid sizes/seeds in batch.
-GRID_SPECS = [
+# Keep separate spec sets for 16x16 and 32x32 runs.
+GRID_SPECS_16 = [
+    {
+        "name": "X1",
+        "grid_size": 16,
+        "num_golds": 50,
+        "num_blocks": 25,
+        "hazards": 30,
+        "episodes": 30_000,
+        "save_every": 1_000,
+        "seeds": 5,
+        "epsilon_decay": 0.99995,
+    },
+    {
+        "name": "X5",
+        "grid_size": 16,
+        "num_golds": 50,
+        "num_blocks": 25,
+        "hazards": 30,
+        "episodes": 150_000,
+        "save_every": 1_000,
+        "seeds": 5,
+        "epsilon_decay": 0.99997,  # matches X1 final epsilon over 150k steps
+    },
+    {
+        "name": "X10",
+        "grid_size": 16,
+        "num_golds": 50,
+        "num_blocks": 25,
+        "hazards": 30,
+        "episodes": 300_000,
+        "save_every": 1_000,
+        "seeds": 5,
+        "epsilon_decay": 0.99999,  # ~same final epsilon as X1 over 300k steps
+    },
+]
+
+# 32x32 uses the same counts to keep the state vector shape consistent.
+GRID_SPECS_32 = [
     {
         "name": "X1",
         "grid_size": 32,
@@ -134,42 +171,8 @@ GRID_SPECS = [
     },
 ]
 
-# 6x6 specs scaled from 16x16 densities (50/25/30 over 16x16 area).
-GRID_SPECS_6 = [
-    {
-        "name": "X1",
-        "grid_size": 6,
-        "num_golds": 7,
-        "num_blocks": 4,
-        "hazards": 4,
-        "episodes": 30_000,
-        "save_every": 1_000,
-        "seeds": 5,
-        "epsilon_decay": 0.99995,
-    },
-    {
-        "name": "X5",
-        "grid_size": 6,
-        "num_golds": 7,
-        "num_blocks": 4,
-        "hazards": 4,
-        "episodes": 150_000,
-        "save_every": 1_000,
-        "seeds": 5,
-        "epsilon_decay": 0.99997,  # matches X1 final epsilon over 150k steps
-    },
-    {
-        "name": "X10",
-        "grid_size": 6,
-        "num_golds": 7,
-        "num_blocks": 4,
-        "hazards": 4,
-        "episodes": 300_000,
-        "save_every": 1_000,
-        "seeds": 5,
-        "epsilon_decay": 0.99999,  # ~same final epsilon as X1 over 300k steps
-    },
-]
+# Backward-compatible default.
+GRID_SPECS = GRID_SPECS_16
 
 # RL query decomposition configuration
 GRIDWORLD_AVAILABLE_ACTIONS = [
