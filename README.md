@@ -128,6 +128,74 @@ The tabular entrypoints used by the Makefile are:
 
 The DQN and PPO workflows are also present under `dqn/` and `ppo/`.
 
+## DQN And PPO Workflows
+
+The deep-RL commands are available through the Makefile as well.
+
+### DQN
+
+Train the 8x8 DQN library with the settings documented in [dqn_train.md](/home/strongich/PythonProj/SELF/lever/LEVER/dqn_train.md):
+
+```bash
+make dqn-train-8
+```
+
+Build the DQN pi2vec assets:
+
+```bash
+make dqn-prep-8
+```
+
+Run the DQN composition experiment:
+
+```bash
+make dqn-exp-8
+```
+
+Run the full DQN workflow:
+
+```bash
+make dqn-repro-8
+```
+
+These commands use:
+
+- training script: `policy_reusability/data_generation/deeprl/train_dqn.py`
+- preparation script: `dqn/pi2vec_preparation.py`
+- experiment script: `dqn/full_experiment.py`
+
+### PPO
+
+Train the 8x8 PPO library with the settings documented in [ppo_train.md](/home/strongich/PythonProj/SELF/lever/LEVER/ppo_train.md):
+
+```bash
+make ppo-train-8
+```
+
+Build the PPO pi2vec assets:
+
+```bash
+make ppo-prep-8
+```
+
+Run the PPO composition experiment:
+
+```bash
+make ppo-exp-8
+```
+
+Run the full PPO workflow:
+
+```bash
+make ppo-repro-8
+```
+
+These commands use:
+
+- training script: `policy_reusability/data_generation/deeprl/train_ppo.py`
+- preparation script: `ppo/pi2vec_preparation.py`
+- experiment script: `ppo/full_experiment.py`
+
 ## Troubleshooting
 
 - If dependency metadata changes, run `make lock` and then `make sync`.

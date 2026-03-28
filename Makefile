@@ -34,13 +34,29 @@ MODELS_16_99 := models_16_99
 RESULTS_16_99 := results_16_99
 COMPARISONS_16_99 := comparisons_16_99
 
+DQN_RUNS_8 := deeprl_runs_dqn_8
+DQN_BASE_DIR_8 := $(DQN_RUNS_8)/8
+DQN_FAISS := faiss_index_dqn
+DQN_DATA := data_rl
+DQN_MODELS := models_dqn
+DQN_RESULTS := results_dqn
+
+PPO_RUNS_8 := deeprl_runs_ppo_8
+PPO_BASE_DIR_8 := $(PPO_RUNS_8)/8
+PPO_FAISS := faiss_index_ppo_8
+PPO_DATA := data_rl
+PPO_MODELS := models_ppo
+PPO_RESULTS := results_8_ppo
+
 .PHONY: help sync lock \
 	states-8-0 states-8-99 states-16-0 states-16-99 \
 	prep-8-0 prep-8-99 prep-16-0 prep-16-99 \
 	exp-8-0 exp-8-99 exp-16-0 exp-16-99 \
 	plots-8-0 plots-8-99 plots-16-0 plots-16-99 \
 	sweep-8-0 sweep-8-99 sweep-16-0 sweep-16-99 \
-	repro-8-0 repro-8-99 repro-16-0 repro-16-99 repro-all
+	repro-8-0 repro-8-99 repro-16-0 repro-16-99 repro-all \
+	dqn-train-8 dqn-prep-8 dqn-exp-8 dqn-repro-8 \
+	ppo-train-8 ppo-prep-8 ppo-exp-8 ppo-repro-8
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "%-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST) | sort
@@ -308,3 +324,85 @@ repro-16-0: states-16-0 prep-16-0 exp-16-0 plots-16-0 ## Run the full 16x16 gamm
 repro-16-99: states-16-99 prep-16-99 exp-16-99 plots-16-99 ## Run the full 16x16 gamma=0.99 tabular pipeline
 
 repro-all: repro-8-0 repro-8-99 repro-16-0 repro-16-99 ## Run all tabular pipelines
+
+dqn-train-8: ## Train the 8x8 DQN library with the documented experiment settings
+	$(PYTHON) policy_reusability/data_generation/deeprl/train_dqn.py \
+		--output-root $(DQN_RUNS_8) \
+		--grid-preset grid8 \
+		--timesteps 2000000 \
+		--obs-mode local --local-size 7 \
+		--snapshot-interval 0 --snapshot-steps 50000 \
+		--n-envs 4 \
+		--learning-starts 10000 \
+		--exploration-fraction 0.25 \
+		--exploration-final-eps 0.05 \
+		--train-freq 4 --gradient-steps 1 \
+		--target-update-interval 10000 --tau 1.0 --batch-size 64 \
+		--loss-plot \
+		--overwrite \
+		--all-rewards
+
+dqn-prep-8: ## Build pi2vec assets for the 8x8 DQN library
+	$(PYTHON) dqn/pi2vec_preparation.py \
+		--base-dir $(DQN_BASE_DIR_8) \
+		--minigrid-ids-path $(DQN_RUNS_8)/minigrid_ids.json \
+		--index-dir $(DQN_FAISS) \
+		--data-dir $(DQN_DATA) \
+		--models-dir $(DQN_MODELS) \
+		--plots-dir plots \
+		--prefilter v1
+
+dqn-exp-8: ## Run the 8x8 DQN composition experiment
+	$(PYTHON) dqn/full_experiment.py \
+		--mode all \
+		--grid-size 8 \
+		--obs-mode local --local-size 7 \
+		--prefilter v1 \
+		--base-dir $(DQN_BASE_DIR_8) \
+		--minigrid-ids-path $(DQN_RUNS_8)/minigrid_ids.json \
+		--eval-seeds-path $(DQN_BASE_DIR_8)/eval_env_seeds.json \
+		--faiss-base-dir $(DQN_FAISS) \
+		--models-dir $(DQN_MODELS) \
+		--data-dir $(DQN_DATA) \
+		--results-dir $(DQN_RESULTS)
+
+dqn-repro-8: dqn-train-8 dqn-prep-8 dqn-exp-8 ## Run the full 8x8 DQN workflow
+
+ppo-train-8: ## Train the 8x8 PPO library with the documented experiment settings
+	$(PYTHON) policy_reusability/data_generation/deeprl/train_ppo.py \
+		--output-root $(PPO_RUNS_8) \
+		--grid-preset grid8 \
+		--timesteps 2000000 \
+		--obs-mode local --local-size 7 \
+		--snapshot-interval 0 --snapshot-steps 50000 \
+		--n-envs 4 \
+		--batch-size 64 \
+		--loss-plot \
+		--overwrite \
+		--all-rewards
+
+ppo-prep-8: ## Build pi2vec assets for the 8x8 PPO library
+	$(PYTHON) ppo/pi2vec_preparation.py \
+		--base-dir $(PPO_BASE_DIR_8) \
+		--minigrid-ids-path $(PPO_RUNS_8)/minigrid_ids.json \
+		--index-dir $(PPO_FAISS) \
+		--data-dir $(PPO_DATA) \
+		--models-dir $(PPO_MODELS) \
+		--plots-dir plots \
+		--prefilter v2
+
+ppo-exp-8: ## Run the 8x8 PPO composition experiment
+	$(PYTHON) ppo/full_experiment.py \
+		--mode all \
+		--grid-size 8 \
+		--obs-mode local --local-size 7 \
+		--prefilter v2 \
+		--base-dir $(PPO_BASE_DIR_8) \
+		--minigrid-ids-path $(PPO_RUNS_8)/minigrid_ids.json \
+		--eval-seeds-path $(PPO_BASE_DIR_8)/eval_env_seeds.json \
+		--faiss-base-dir $(PPO_FAISS) \
+		--models-dir $(PPO_MODELS) \
+		--data-dir $(PPO_DATA) \
+		--results-dir $(PPO_RESULTS)
+
+ppo-repro-8: ppo-train-8 ppo-prep-8 ppo-exp-8 ## Run the full 8x8 PPO workflow
