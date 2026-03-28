@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=67", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lever"
+version = "0.1.0"
+description = "Inference-time policy composition experiments for GridWorld reinforcement learning"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {file = "LICENSE"}
+dependencies = [
+    "faiss-cpu",
+    "gym",
+    "gymnasium",
+    "matplotlib",
+    "minigrid",
+    "networkx",
+    "numpy",
+    "openai",
+    "pandas",
+    "pulp",
+    "pydantic",
+    "python-dotenv",
+    "scikit-learn",
+    "sentence-transformers",
+    "stable-baselines3",
+    "torch",
+    "tqdm",
+    "transformers",
+]
+
+[tool.setuptools]
+py-modules = ["config"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "tabular*",
+    "dqn*",
+    "ppo*",
+    "policy_reusability*",
+    "pi2vec*",
+    "faiss_utils*",
+    "plots*",
+]
