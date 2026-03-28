@@ -140,10 +140,20 @@ Train the 8x8 DQN library with the settings documented in [dqn_train.md](/home/s
 make dqn-train-8
 ```
 
+Train the 16x16 DQN library:
+
+```bash
+make dqn-train-16
+```
+
 Build the DQN pi2vec assets:
 
 ```bash
 make dqn-prep-8
+```
+
+```bash
+make dqn-prep-16
 ```
 
 Run the DQN composition experiment:
@@ -152,10 +162,15 @@ Run the DQN composition experiment:
 make dqn-exp-8
 ```
 
+```bash
+make dqn-exp-16
+```
+
 Run the full DQN workflow:
 
 ```bash
 make dqn-repro-8
+make dqn-repro-16
 ```
 
 These commands use:

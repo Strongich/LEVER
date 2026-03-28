@@ -36,10 +36,14 @@ COMPARISONS_16_99 := comparisons_16_99
 
 DQN_RUNS_8 := deeprl_runs_dqn_8
 DQN_BASE_DIR_8 := $(DQN_RUNS_8)/8
+DQN_RUNS_16 := deeprl_runs_dqn_16
+DQN_BASE_DIR_16 := $(DQN_RUNS_16)/16
 DQN_FAISS := faiss_index_dqn
+DQN_FAISS_16 := faiss_index_dqn_16
 DQN_DATA := data_rl
 DQN_MODELS := models_dqn
 DQN_RESULTS := results_dqn
+DQN_RESULTS_16 := results_16_dqn
 
 PPO_RUNS_8 := deeprl_runs_ppo_8
 PPO_BASE_DIR_8 := $(PPO_RUNS_8)/8
@@ -56,6 +60,7 @@ PPO_RESULTS := results_8_ppo
 	sweep-8-0 sweep-8-99 sweep-16-0 sweep-16-99 \
 	repro-8-0 repro-8-99 repro-16-0 repro-16-99 repro-all \
 	dqn-train-8 dqn-prep-8 dqn-exp-8 dqn-repro-8 \
+	dqn-train-16 dqn-prep-16 dqn-exp-16 dqn-repro-16 \
 	ppo-train-8 ppo-prep-8 ppo-exp-8 ppo-repro-8
 
 help: ## Show available targets
@@ -367,6 +372,49 @@ dqn-exp-8: ## Run the 8x8 DQN composition experiment
 		--results-dir $(DQN_RESULTS)
 
 dqn-repro-8: dqn-train-8 dqn-prep-8 dqn-exp-8 ## Run the full 8x8 DQN workflow
+
+dqn-train-16: ## Train the 16x16 DQN library with the documented 16x16 settings
+	$(PYTHON) policy_reusability/data_generation/deeprl/train_dqn.py \
+		--output-root $(DQN_RUNS_16) \
+		--grid-preset grid16_scaled \
+		--timesteps 8000000 \
+		--obs-mode local --local-size 7 \
+		--snapshot-interval 0 --snapshot-steps 200000 \
+		--n-envs 4 \
+		--learning-starts 10000 \
+		--exploration-fraction 0.25 \
+		--exploration-final-eps 0.05 \
+		--train-freq 4 --gradient-steps 1 \
+		--target-update-interval 10000 --tau 1.0 --batch-size 64 \
+		--loss-plot \
+		--overwrite \
+		--all-rewards
+
+dqn-prep-16: ## Build pi2vec assets for the 16x16 DQN library
+	$(PYTHON) dqn/pi2vec_preparation.py \
+		--base-dir $(DQN_BASE_DIR_16) \
+		--minigrid-ids-path $(DQN_RUNS_16)/minigrid_ids.json \
+		--index-dir $(DQN_FAISS_16) \
+		--data-dir $(DQN_DATA) \
+		--models-dir $(DQN_MODELS) \
+		--plots-dir plots \
+		--prefilter v1
+
+dqn-exp-16: ## Run the 16x16 DQN composition experiment
+	$(PYTHON) dqn/full_experiment.py \
+		--mode all \
+		--grid-size 16 \
+		--obs-mode local --local-size 7 \
+		--prefilter v1 \
+		--base-dir $(DQN_BASE_DIR_16) \
+		--minigrid-ids-path $(DQN_RUNS_16)/minigrid_ids.json \
+		--eval-seeds-path $(DQN_BASE_DIR_16)/eval_env_seeds.json \
+		--faiss-base-dir $(DQN_FAISS_16) \
+		--models-dir $(DQN_MODELS) \
+		--data-dir $(DQN_DATA) \
+		--results-dir $(DQN_RESULTS_16)
+
+dqn-repro-16: dqn-train-16 dqn-prep-16 dqn-exp-16 ## Run the full 16x16 DQN workflow
 
 ppo-train-8: ## Train the 8x8 PPO library with the documented experiment settings
 	$(PYTHON) policy_reusability/data_generation/deeprl/train_ppo.py \
