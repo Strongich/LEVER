@@ -1,5 +1,7 @@
 # LEVER
 
+[![arXiv](https://img.shields.io/badge/arXiv-preprint-b31b1b.svg)]()
+
 Inference-time policy composition for GridWorld reinforcement learning.
 
 ![LEVER diagram](figs/lever_2.png)
