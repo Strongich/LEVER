@@ -14,7 +14,7 @@ The project uses `uv` for environment management.
 make sync
 ```
 
-That creates `.venv/` from [pyproject.toml](/home/strongich/PythonProj/SELF/lever/LEVER/pyproject.toml) and [uv.lock](/home/strongich/PythonProj/SELF/lever/LEVER/uv.lock). The repository pins Python 3.12 in [.python-version](/home/strongich/PythonProj/SELF/lever/LEVER/.python-version).
+That creates `.venv/` from [pyproject.toml](pyproject.toml) and [uv.lock](uv.lock). The repository pins Python 3.12 in [.python-version](.python-version).
 
 For manual runs, use:
 
@@ -134,7 +134,7 @@ The deep-RL commands are available through the Makefile as well.
 
 ### DQN
 
-Train the 8x8 DQN library with the settings documented in [dqn_train.md](/home/strongich/PythonProj/SELF/lever/LEVER/dqn_train.md):
+Train the 8x8 DQN library with the settings documented in [dqn_train.md](dqn_train.md):
 
 ```bash
 make dqn-train-8
@@ -181,7 +181,7 @@ These commands use:
 
 ### PPO
 
-Train the 8x8 PPO library with the settings documented in [ppo_train.md](/home/strongich/PythonProj/SELF/lever/LEVER/ppo_train.md):
+Train the 8x8 PPO library with the settings documented in [ppo_train.md](ppo_train.md):
 
 ```bash
 make ppo-train-8
