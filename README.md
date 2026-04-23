@@ -2,7 +2,7 @@
 
 [![arXiv](https://img.shields.io/badge/arXiv-preprint-b31b1b.svg)]()
 
-Inference-time policy composition for GridWorld reinforcement learning.
+Inference-Time Policy Reuse via Offline Composition
 
 ![LEVER diagram](figs/lever_2.png)
 
