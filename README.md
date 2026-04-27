@@ -2,7 +2,7 @@
 
 [![arXiv](https://img.shields.io/badge/arXiv-preprint-b31b1b.svg)](https://arxiv.org/pdf/2604.20174)
 
-Inference-Time Policy Reuse via Offline Composition
+Inference-Time Policy Reuse under Support Constraints
 
 ![LEVER diagram](figs/lever_2.png)
 
