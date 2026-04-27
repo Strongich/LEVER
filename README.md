@@ -1,6 +1,6 @@
 # LEVER
 
-[![arXiv](https://img.shields.io/badge/arXiv-preprint-b31b1b.svg)]([https://arxiv.org/pdf/2604.20174](https://arxiv.org/abs/2604.20174))
+[![arXiv](https://img.shields.io/badge/arXiv-preprint-b31b1b.svg)](https://arxiv.org/abs/2604.20174)
 
 Inference-Time Policy Reuse under Support Constraints
 
