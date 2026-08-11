@@ -1,10 +1,12 @@
-# LEVER
+# When Can Pre-Trained Policies Be Reused? Inference-Time Policy Composition from Fixed Policy Libraries
 
-[![arXiv](https://img.shields.io/badge/arXiv-preprint-b31b1b.svg)](https://arxiv.org/abs/2604.20174)
+**CIKM 2026 Short Paper Track**
 
-Inference-Time Policy Reuse under Support Constraints
+[Ihor Vitenko](https://strongich.github.io/)<sup>1</sup>, [Noha Ibrahim](https://scholar.google.com/citations?user=bmAiTSEAAAAJ&hl=en)<sup>2\*</sup>, [Sihem Amer-Yahia](https://scholar.google.com/citations?user=rMtUkMcAAAAJ&hl=en)<sup>3\*</sup>
 
-![LEVER diagram](figs/lever_2.png)
+<sup>1</sup>National Technical University of Ukraine "Igor Sikorsky Kyiv Polytechnic Institute", <sup>2</sup>Grenoble INP, Université Grenoble Alpes, <sup>3</sup>CNRS, Université Grenoble Alpes, <sup>\*</sup>corresponding author
+
+![MOSAIC diagram](figs/MOSAIC.png)
 
 ## Setup
 
@@ -215,3 +217,27 @@ These commands use:
 
 - If dependency metadata changes, run `make lock` and then `make sync`.
 - If artifacts are missing for one configuration, rerun the matching `prep-*` or `exp-*` target.
+
+## Citation
+
+If you use this code, please cite the CIKM 2026 paper:
+
+```bibtex
+@inproceedings{vitenko2026mosaic,
+  title     = {When Can Pre-Trained Policies Be Reused? Inference-Time Policy Composition from Fixed Policy Libraries},
+  author    = {Vitenko, Ihor and Ibrahim, Noha and Amer-Yahia, Sihem},
+  booktitle = {Proceedings of the ACM International Conference on Information and Knowledge Management (CIKM)},
+  year      = {2026}
+}
+```
+
+An extended version is available as a preprint ([arXiv:2604.20174](https://arxiv.org/abs/2604.20174)):
+
+```bibtex
+@article{vitenko2026lever,
+  title   = {LEVER: Inference-Time Policy Reuse under Support Constraints},
+  author  = {Vitenko, Ihor and Ibrahim, Noha and Amer-Yahia, Sihem},
+  journal = {arXiv preprint arXiv:2604.20174},
+  year    = {2026}
+}
+```

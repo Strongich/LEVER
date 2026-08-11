@@ -1,0 +1,60 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite the CIKM 2026 paper below."
+title: MOSAIC
+abstract: >-
+  Inference-time policy composition from fixed policy libraries for GridWorld
+  reinforcement learning.
+type: software
+license: MIT
+repository-code: "https://github.com/Strongich/MOSAIC"
+authors:
+  - given-names: Ihor
+    family-names: Vitenko
+    affiliation: >-
+      National Technical University of Ukraine "Igor Sikorsky Kyiv Polytechnic
+      Institute"
+    website: "https://strongich.github.io/"
+  - given-names: Noha
+    family-names: Ibrahim
+    affiliation: "Grenoble INP, Université Grenoble Alpes"
+    email: noha.ibrahim@univ-grenoble-alpes.fr
+  - given-names: Sihem
+    family-names: Amer-Yahia
+    affiliation: "CNRS, Université Grenoble Alpes"
+    email: sihem.amer-yahia@univ-grenoble-alpes.fr
+preferred-citation:
+  type: conference-paper
+  title: >-
+    When Can Pre-Trained Policies Be Reused? Inference-Time Policy Composition
+    from Fixed Policy Libraries
+  year: 2026
+  collection-title: >-
+    Proceedings of the ACM International Conference on Information and Knowledge
+    Management (CIKM)
+  conference:
+    name: "CIKM 2026"
+  authors:
+    - given-names: Ihor
+      family-names: Vitenko
+      affiliation: >-
+        National Technical University of Ukraine "Igor Sikorsky Kyiv Polytechnic
+        Institute"
+    - given-names: Noha
+      family-names: Ibrahim
+      affiliation: "Grenoble INP, Université Grenoble Alpes"
+    - given-names: Sihem
+      family-names: Amer-Yahia
+      affiliation: "CNRS, Université Grenoble Alpes"
+references:
+  - type: article
+    title: "LEVER: Inference-Time Policy Reuse under Support Constraints"
+    year: 2026
+    notes: Extended preprint version of the CIKM 2026 paper.
+    url: "https://arxiv.org/abs/2604.20174"
+    authors:
+      - given-names: Ihor
+        family-names: Vitenko
+      - given-names: Noha
+        family-names: Ibrahim
+      - given-names: Sihem
+        family-names: Amer-Yahia
